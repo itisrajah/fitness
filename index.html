@@ -85,7 +85,7 @@
         </button>
       </div>
 
-      <!-- Right Controls: Admin Toggle, Sound Toggle, Today Jump, Database Sync -->
+      <!-- Right Controls: Admin Toggle, Sound Toggle, Today Jump, Back-End Database Indicator -->
       <div class="flex items-center gap-2 sm:gap-3">
         <!-- Admin Mode Toggle -->
         <button id="btn-toggle-admin" type="button" class="px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/70" title="Toggle Admin Media Upload Controls">
@@ -111,11 +111,11 @@
           Today
         </button>
 
-        <!-- Direct Google Sheet Connection Status Pill -->
-        <button id="btn-sheet-status" type="button" data-action="handle-sheet-badge" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200/80 text-emerald-700 text-xs font-semibold transition-colors" title="Google Sheets Database Status (Click to sync or configure back-end URL)">
+        <!-- Passive Back-End Database Status Indicator (No Front-End Setup) -->
+        <div id="db-status-pill" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-semibold select-none">
           <span id="db-sync-dot" class="w-2 h-2 rounded-full bg-emerald-500"></span>
-          <span id="db-sync-text">Google Sheet Ready</span>
-        </button>
+          <span id="db-sync-text">Google Sheet Synced</span>
+        </div>
       </div>
     </div>
   </header>
@@ -138,138 +138,16 @@
     import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     // =========================================================================
-    // 0. DIRECT GOOGLE SHEETS BACK-END CONFIGURATION
-    // Option A (Recommended - Zero URLs): Host this HTML inside Google Sheets
-    //   (Extensions -> Apps Script -> Index.html). It automatically uses
-    //   `google.script.run` to read/write directly to your Google Sheet.
-    // Option B (External Hosting): If hosting on Vercel/Netlify/GitHub Pages,
-    //   paste your deployed Google Apps Script Web App URL below once so all
-    //   users and browsers connect automatically with zero user setup.
+    // 0. PURE BACK-END GOOGLE SHEETS CONNECTION
+    // - When hosted inside Google Sheets (Extensions -> Apps Script -> Index.html),
+    //   `google.script.run` binds directly to your spreadsheet on the back end.
+    // - When hosted on an external web server, set GOOGLE_SHEET_WEB_APP_URL once
+    //   below on the back end; end users never configure anything on the front end.
     // =========================================================================
     const BACKEND_CONFIG = {
-      GOOGLE_SHEET_WEB_APP_URL: '', // Paste your https://script.google.com/macros/s/.../exec URL here
-      AUTO_POLL_INTERVAL_MS: 15000, // Sync updates across open browsers every 15s
+      GOOGLE_SHEET_WEB_APP_URL: '',
+      AUTO_POLL_INTERVAL_MS: 15000,
     };
-
-    const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doGet(e) {
-  if (!e || !e.parameter || !e.parameter.api) {
-    return HtmlService.createHtmlOutputFromFile('Index')
-      .setTitle('PulsePlan Pro — Workout Calendar & Guided Trainer')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-  }
-  return ContentService.createTextOutput(JSON.stringify(getInitialData()))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  try {
-    var payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    if (payload.action === 'saveWorkout' && payload.workout) {
-      saveWorkoutToSheet(payload.workout);
-    } else if (payload.action === 'deleteWorkout' && payload.dateStr) {
-      deleteWorkoutFromSheet(payload.dateStr);
-    } else if (payload.action === 'saveMedia' && payload.exId) {
-      saveMediaToSheet(payload.exId, payload.media || {});
-    }
-    return ContentService.createTextOutput(JSON.stringify({ ok: true }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function getInitialData() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var wSheet = getOrCreateSheet_(ss, 'Workouts', ['Date', 'TargetSplit', 'Status', 'DurationSeconds', 'UpdatedAt', 'WorkoutJSON']);
-  var mSheet = getOrCreateSheet_(ss, 'MediaOverrides', ['ExerciseID', 'MediaMode', 'VideoURL', 'GifURL', 'UpdatedAt']);
-
-  var workouts = {};
-  var wRows = wSheet.getDataRange().getDisplayValues();
-  for (var i = 1; i < wRows.length; i++) {
-    var dateKey = String(wRows[i][0] || '').trim();
-    var jsonStr = String(wRows[i][5] || '').trim();
-    if (dateKey && jsonStr) {
-      try {
-        workouts[dateKey] = JSON.parse(jsonStr);
-      } catch (e) {}
-    }
-  }
-
-  var media = {};
-  var mRows = mSheet.getDataRange().getDisplayValues();
-  for (var j = 1; j < mRows.length; j++) {
-    var exId = String(mRows[j][0] || '').trim();
-    if (exId) {
-      media[exId] = {
-        mediaMode: mRows[j][1] || 'gif',
-        videoUrl: mRows[j][2] || '',
-        gifUrl: mRows[j][3] || ''
-      };
-    }
-  }
-
-  return { ok: true, workouts: workouts, media: media };
-}
-
-function saveWorkoutToSheet(w) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = getOrCreateSheet_(ss, 'Workouts', ['Date', 'TargetSplit', 'Status', 'DurationSeconds', 'UpdatedAt', 'WorkoutJSON']);
-  upsertRow_(sheet, w.dateStr, [
-    "'" + String(w.dateStr).trim(),
-    w.targetSplit || '',
-    w.status || 'assigned',
-    Number(w.durationSeconds) || 0,
-    new Date().toISOString(),
-    JSON.stringify(w)
-  ]);
-}
-
-function deleteWorkoutFromSheet(dateStr) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = getOrCreateSheet_(ss, 'Workouts', ['Date', 'TargetSplit', 'Status', 'DurationSeconds', 'UpdatedAt', 'WorkoutJSON']);
-  var data = sheet.getDataRange().getDisplayValues();
-  for (var i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][0] || '').trim() === String(dateStr).trim()) {
-      sheet.deleteRow(i + 1);
-    }
-  }
-}
-
-function saveMediaToSheet(exId, m) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = getOrCreateSheet_(ss, 'MediaOverrides', ['ExerciseID', 'MediaMode', 'VideoURL', 'GifURL', 'UpdatedAt']);
-  upsertRow_(sheet, exId, [
-    "'" + String(exId).trim(),
-    m.mediaMode || 'gif',
-    m.videoUrl || '',
-    m.gifUrl || '',
-    new Date().toISOString()
-  ]);
-}
-
-function getOrCreateSheet_(ss, name, headers) {
-  var s = ss.getSheetByName(name);
-  if (!s) {
-    s = ss.insertSheet(name);
-    s.appendRow(headers);
-    s.getRange(1, 1, 1, headers.length).setFontWeight('bold');
-    s.setFrozenRows(1);
-  }
-  return s;
-}
-
-function upsertRow_(sheet, key, vals) {
-  var cleanKey = String(key || '').replace(/^'/, '').trim();
-  var data = sheet.getDataRange().getDisplayValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0] || '').trim() === cleanKey) {
-      sheet.getRange(i + 1, 1, 1, vals.length).setValues([vals]);
-      return;
-    }
-  }
-  sheet.appendRow(vals);
-}`;
 
     function buildGoogleSheetGetUrl(baseUrl) {
       const clean = (baseUrl || '').trim();
@@ -277,32 +155,9 @@ function upsertRow_(sheet, key, vals) {
       return clean.includes('?') ? `${clean}&api=1` : `${clean}?api=1`;
     }
 
-    function isGoogleAppsScriptNative() {
-      return Boolean(
-        typeof window !== 'undefined' &&
-        window.google &&
-        window.google.script &&
-        window.google.script.run
-      );
-    }
-
-    function callAppsScriptDirect(methodName, ...args) {
-      return new Promise((resolve, reject) => {
-        if (!isGoogleAppsScriptNative()) {
-          reject(new Error('Not running inside Google Apps Script container'));
-          return;
-        }
-        window.google.script.run
-          .withSuccessHandler((res) => resolve(res))
-          .withFailureHandler((err) => reject(err))
-          [methodName](...args);
-      });
-    }
-
     // =========================================================================
-    // 1. DATE & UTILITY HELPERS
+    // 1. DATE, FORMATTING & SANITIZATION UTILITIES
     // =========================================================================
-
     function toDateStr(dateObj) {
       const y = dateObj.getFullYear();
       const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -311,41 +166,34 @@ function upsertRow_(sheet, key, vals) {
     }
 
     function parseDateStr(dateStr) {
-      const [y, m, d] = dateStr.split('-').map(Number);
+      const [y, m, d] = (dateStr || '').split('-').map(Number);
+      if (!y || !m || !d) return new Date();
       return new Date(y, m - 1, d);
-    }
-
-    function formatDuration(totalSeconds) {
-      const sec = Math.max(0, Math.floor(totalSeconds));
-      const hrs = Math.floor(sec / 3600);
-      const mins = Math.floor((sec % 3600) / 60);
-      const remSec = sec % 60;
-      if (hrs > 0) {
-        return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
-      }
-      return `${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
     }
 
     function formatReadableDate(dateStr) {
       const d = parseDateStr(dateStr);
       return d.toLocaleDateString('en-US', {
         weekday: 'long',
-        month: 'long',
+        month: 'short',
         day: 'numeric',
         year: 'numeric',
       });
     }
 
-    function getAutoSplitForDate(dateStr) {
-      const d = parseDateStr(dateStr);
-      const dayIndex = Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
-      const splits = ['Full Body', 'Upper Body', 'Lower Body'];
-      return splits[((dayIndex % 3) + 3) % 3];
+    function formatDuration(totalSeconds) {
+      const safe = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+      const hrs = Math.floor(safe / 3600);
+      const mins = Math.floor((safe % 3600) / 60);
+      const secs = safe % 60;
+      if (hrs > 0) {
+        return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      }
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
 
     function escapeHtml(str) {
-      if (str === null || str === undefined) return '';
-      return String(str)
+      return String(str ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -353,104 +201,301 @@ function upsertRow_(sheet, key, vals) {
         .replace(/'/g, '&#39;');
     }
 
+    const todayStr = toDateStr(new Date());
+
     // =========================================================================
-    // 2. SYNTHESIZED AUDIO CUES (Web Audio API — Zero external audio URLs)
+    // 2. WEB AUDIO SYNTHESIZER FOR WORKOUT & REST TIMER CUES
     // =========================================================================
     let audioCtx = null;
 
     function playTone(freq = 520, duration = 0.14, type = 'sine', delay = 0) {
       if (!state.soundEnabled) return;
       try {
-        if (!audioCtx) {
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (audioCtx.state === 'suspended') {
-          audioCtx.resume();
-        }
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        if (!audioCtx) audioCtx = new AudioContextClass();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = type;
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime + delay);
-        gain.gain.setValueAtTime(0.08, audioCtx.currentTime + delay);
+
+        gain.gain.setValueAtTime(0.001, audioCtx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(0.14, audioCtx.currentTime + delay + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + delay + duration);
+
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.start(audioCtx.currentTime + delay);
-        osc.stop(audioCtx.currentTime + delay + duration);
+        osc.stop(audioCtx.currentTime + delay + duration + 0.02);
       } catch (e) {
-        // Ignore browser audio autoplay restrictions gracefully
+        // Ignore audio autoplay restriction errors
       }
     }
 
     function playChimeComplete() {
-      playTone(587.33, 0.14, 'triangle', 0);
-      playTone(880, 0.24, 'triangle', 0.13);
+      playTone(587.33, 0.12, 'triangle', 0);
+      playTone(880.0, 0.2, 'triangle', 0.12);
     }
 
     function playWorkoutFanfare() {
-      playTone(523.25, 0.15, 'triangle', 0);
-      playTone(659.25, 0.15, 'triangle', 0.14);
-      playTone(783.99, 0.15, 'triangle', 0.28);
-      playTone(1046.5, 0.35, 'triangle', 0.42);
+      playTone(523.25, 0.14, 'triangle', 0);
+      playTone(659.25, 0.14, 'triangle', 0.14);
+      playTone(783.99, 0.14, 'triangle', 0.28);
+      playTone(1046.5, 0.32, 'triangle', 0.42);
     }
 
     // =========================================================================
-    // 3. EXERCISE TEMPLATES & VECTOR GIF ANIMATOR
+    // 3. EXERCISE LIBRARY & STRUCTURED WORKOUT GENERATOR
     // =========================================================================
-    const EXERCISE_TEMPLATES = {
+    const EXERCISE_LIBRARY = {
       warmup: [
-        { id: 'wu-jumping-jacks', name: 'Jumping Jacks', muscle: 'Cardio & Full Body', repType: 'time', repValue: 30, animType: 'jumping-jacks', cues: 'Land softly on the balls of your feet and reach arms fully overhead.' },
-        { id: 'wu-arm-circles', name: 'Dynamic Arm Circles', muscle: 'Shoulders & Upper Back', repType: 'time', repValue: 30, animType: 'stretch', cues: 'Keep core braced and gradually widen circles forward and backward.' },
-        { id: 'wu-inchworms', name: 'Inchworm Walkouts', muscle: 'Hamstrings & Core', repType: 'reps', repValue: 8, animType: 'pushup', cues: 'Hinge at the hips, walk hands out to a strong plank, then walk back.' },
-        { id: 'wu-high-knees', name: 'High Knee March', muscle: 'Hip Flexors & Cardio', repType: 'time', repValue: 30, animType: 'jumping-jacks', cues: 'Drive knees up to hip height while pumping opposite arms briskly.' },
-        { id: 'wu-hip-hinge', name: 'Bodyweight Good Mornings', muscle: 'Posterior Chain', repType: 'reps', repValue: 12, animType: 'squat', cues: 'Push hips straight back with a flat spine until hamstrings feel a light stretch.' },
-        { id: 'wu-torso-twists', name: 'Thoracic Torso Rotations', muscle: 'Spine & Obliques', repType: 'time', repValue: 30, animType: 'twist', cues: 'Pivot back foot smoothly and rotate through your upper back.' },
+        {
+          id: 'wu-jumping-jacks',
+          name: 'Jumping Jacks',
+          muscle: 'Full Body Cardio',
+          repType: 'time',
+          repValue: 30,
+          animType: 'jumping-jacks',
+          cues: 'Land softly on the balls of your feet and reach arms fully overhead.',
+        },
+        {
+          id: 'wu-arm-circles',
+          name: 'Dynamic Arm Circles & Shoulder Rolls',
+          muscle: 'Shoulders & Upper Back',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Perform 15 seconds forward and 15 seconds backward with tall posture.',
+        },
+        {
+          id: 'wu-torso-twists',
+          name: 'Standing Torso Rotations',
+          muscle: 'Thoracic Spine & Core',
+          repType: 'reps',
+          repValue: 16,
+          animType: 'twist',
+          cues: 'Pivot back heel smoothly and rotate shoulders side to side with control.',
+        },
+        {
+          id: 'wu-hip-hinges',
+          name: 'Bodyweight Good Mornings',
+          muscle: 'Hamstrings & Glutes',
+          repType: 'reps',
+          repValue: 12,
+          animType: 'squat',
+          cues: 'Push hips straight back with a flat spine until you feel a light hamstring stretch.',
+        },
+        {
+          id: 'wu-high-knees',
+          name: 'Brisk High-Knee March',
+          muscle: 'Hip Flexors & Pulse',
+          repType: 'time',
+          repValue: 30,
+          animType: 'jumping-jacks',
+          cues: 'Drive knees to hip height while pumping opposite arms.',
+        },
+        {
+          id: 'wu-inchworms',
+          name: 'Walkout Inchworms',
+          muscle: 'Shoulders, Core & Posterior Chain',
+          repType: 'reps',
+          repValue: 8,
+          animType: 'pushup',
+          cues: 'Walk hands out to a firm high plank, pause briefly, and walk back to standing.',
+        },
       ],
-      superset1: {
+
+      superset1BySplit: {
         'Full Body': [
-          { id: 'fb-goblet-squat', name: 'Dumbbell Goblet Squats', muscle: 'Quads, Glutes & Core', repType: 'reps', repValue: 12, animType: 'squat', cues: 'Keep chest proud, elbows tucked inside knees, and drive through mid-foot.' },
-          { id: 'fb-pushup-row', name: 'Push-Up to Renegade Row', muscle: 'Chest, Back & Arms', repType: 'reps', repValue: 10, animType: 'pushup', cues: 'Perform a crisp push-up, stabilize hips, and row each elbow toward ribs.' },
-          { id: 'fb-reverse-lunge', name: 'Alternating Reverse Lunges', muscle: 'Glutes & Hamstrings', repType: 'reps', repValue: 12, animType: 'squat', cues: 'Step back with control until both knees form 90-degree angles.' },
+          {
+            id: 'fb-goblet-squat',
+            name: 'Bodyweight Tempo Squats',
+            muscle: 'Quads, Glutes & Core',
+            repType: 'reps',
+            repValue: 15,
+            animType: 'squat',
+            cues: 'Sit hips down and back for 2 seconds, keep chest proud, drive through mid-foot.',
+          },
+          {
+            id: 'fb-pushups',
+            name: 'Standard Push-Ups',
+            muscle: 'Chest, Shoulders & Triceps',
+            repType: 'reps',
+            repValue: 12,
+            animType: 'pushup',
+            cues: 'Keep elbows at 45 degrees and maintain a rigid plank line from head to heels.',
+          },
+          {
+            id: 'fb-reverse-lunges',
+            name: 'Alternating Reverse Lunges',
+            muscle: 'Glutes, Quads & Balance',
+            repType: 'reps',
+            repValue: 16,
+            animType: 'squat',
+            cues: 'Step back softly, lower rear knee toward the floor, and push through front heel.',
+          },
         ],
         'Upper Body': [
-          { id: 'ub-pushups', name: 'Tempo Chest Push-Ups', muscle: 'Pectorals, Shoulders & Triceps', repType: 'reps', repValue: 15, animType: 'pushup', cues: 'Lower chest for 2 seconds with elbows at 45 degrees, press explosively.' },
-          { id: 'ub-bent-row', name: 'Bent-Over Double Rows', muscle: 'Lats, Rhomboids & Rear Delts', repType: 'reps', repValue: 12, animType: 'squat', cues: 'Hinge forward 45 degrees and squeeze shoulder blades together at the top.' },
-          { id: 'ub-overhead-press', name: 'Standing Overhead Press', muscle: 'Deltoids & Triceps', repType: 'reps', repValue: 12, animType: 'jumping-jacks', cues: 'Brace glutes and abs so ribs stay down as you press straight overhead.' },
+          {
+            id: 'ub-pushups',
+            name: 'Chest-Focused Push-Ups',
+            muscle: 'Pectorals & Anterior Delts',
+            repType: 'reps',
+            repValue: 14,
+            animType: 'pushup',
+            cues: 'Lower chest between hands with control and press explosively back to lockout.',
+          },
+          {
+            id: 'ub-pike-press',
+            name: 'Pike Shoulder Presses',
+            muscle: 'Shoulders & Triceps',
+            repType: 'reps',
+            repValue: 10,
+            animType: 'pushup',
+            cues: 'Hinge hips high into an inverted V and lower crown of head toward floor.',
+          },
+          {
+            id: 'ub-prone-ytw',
+            name: 'Prone Back Squeeze & Raises',
+            muscle: 'Upper Back & Rear Delts',
+            repType: 'reps',
+            repValue: 15,
+            animType: 'plank',
+            cues: 'Pinch shoulder blades together and lift arms slightly off the mat without shrugging.',
+          },
         ],
         'Lower Body': [
-          { id: 'lb-squats', name: 'Deep Tempo Air/Goblet Squats', muscle: 'Quadriceps & Glutes', repType: 'reps', repValue: 15, animType: 'squat', cues: 'Sit between your heels while keeping knees tracking over second toes.' },
-          { id: 'lb-rdl', name: 'Romanian Deadlifts (RDL)', muscle: 'Hamstrings & Glutes', repType: 'reps', repValue: 12, animType: 'squat', cues: 'Soft knee bend, slide weights down shins, and snap hips forward.' },
-          { id: 'lb-split-squat', name: 'Bulgarian Split Squats', muscle: 'Single-Leg Quads & Glutes', repType: 'reps', repValue: 10, animType: 'squat', cues: 'Keep front shin vertical and torso slightly hinged for maximum glute drive.' },
+          {
+            id: 'lb-sumo-squat',
+            name: 'Wide-Stance Sumo Squats',
+            muscle: 'Inner Thighs, Glutes & Quads',
+            repType: 'reps',
+            repValue: 16,
+            animType: 'squat',
+            cues: 'Turn toes out 30 degrees, track knees over toes, and squeeze glutes at top.',
+          },
+          {
+            id: 'lb-split-squat',
+            name: 'Bulgarian / Split Squats',
+            muscle: 'Quads & Glutes',
+            repType: 'reps',
+            repValue: 14,
+            animType: 'squat',
+            cues: 'Keep 80% of weight on front foot and drop hips straight down.',
+          },
+          {
+            id: 'lb-glute-bridge',
+            name: 'Single-Leg / Glute Bridges',
+            muscle: 'Glutes & Hamstrings',
+            repType: 'reps',
+            repValue: 18,
+            animType: 'plank',
+            cues: 'Drive through heels, tuck pelvis slightly, and hold peak contraction for 1 second.',
+          },
         ],
       },
-      superset2Abs: {
-        'Full Body': [
-          { id: 'abs-forearm-plank', name: 'Forearm Plank Hold', muscle: 'Transverse Abdominis', repType: 'time', repValue: 30, animType: 'plank', cues: 'Press forearms into the floor, tuck pelvis slightly, and breathe steadily.' },
-          { id: 'abs-bicycle-crunch', name: 'Controlled Bicycle Crunches', muscle: 'Rectus Abdominis & Obliques', repType: 'reps', repValue: 20, animType: 'twist', cues: 'Bring opposite shoulder toward knee while extending the other leg long.' },
-          { id: 'abs-leg-raises', name: 'Lying Straight Leg Raises', muscle: 'Lower Abs', repType: 'reps', repValue: 12, animType: 'plank', cues: 'Keep lower back pressed flat against the mat as you lower legs slowly.' },
-        ],
-        'Upper Body': [
-          { id: 'abs-hollow-hold', name: 'Hollow Body Core Hold', muscle: 'Deep Anterior Core', repType: 'time', repValue: 30, animType: 'plank', cues: 'Lift shoulder blades and heels a few inches off the floor without arching.' },
-          { id: 'abs-russian-twists', name: 'Seated Russian Twists', muscle: 'Obliques & Core', repType: 'reps', repValue: 20, animType: 'twist', cues: 'Lean back 45 degrees with a tall spine and tap hands side to side.' },
-          { id: 'abs-mountain-climbers', name: 'Slow-Control Mountain Climbers', muscle: 'Core & Shoulder Stability', repType: 'time', repValue: 30, animType: 'pushup', cues: 'Keep hips level in a high plank and draw knees cleanly toward chest.' },
-        ],
-        'Lower Body': [
-          { id: 'abs-side-plank', name: 'Side Plank Hold', muscle: 'Obliques & Quadratus Lumborum', repType: 'time', repValue: 30, animType: 'plank', cues: 'Stack elbow directly under shoulder and lift hips into a straight line.' },
-          { id: 'abs-reverse-crunch', name: 'Reverse Crunches', muscle: 'Lower Rectus Abdominis', repType: 'reps', repValue: 15, animType: 'plank', cues: 'Curl pelvis off the floor using lower abs rather than swinging legs.' },
-          { id: 'abs-dead-bug', name: 'Dead Bug Cross Extensions', muscle: 'Deep Core & Pelvic Control', repType: 'reps', repValue: 12, animType: 'twist', cues: 'Extend opposite arm and leg slowly while keeping lumbar spine glued down.' },
-        ],
-      },
+
+      superset2Abs: [
+        {
+          id: 'abs-forearm-plank',
+          name: 'Forearm Hollow Plank',
+          muscle: 'Transverse Abdominis & Core',
+          repType: 'time',
+          repValue: 30,
+          animType: 'plank',
+          cues: 'Brace abs tightly as if expecting a punch and press forearms firmly into the floor.',
+        },
+        {
+          id: 'abs-bicycle-crunch',
+          name: 'Controlled Bicycle Crunches',
+          muscle: 'Obliques & Rectus Abdominis',
+          repType: 'reps',
+          repValue: 20,
+          animType: 'twist',
+          cues: 'Rotate ribcage toward opposite knee while extending the other leg fully.',
+        },
+        {
+          id: 'abs-russian-twists',
+          name: 'Seated Russian Twists',
+          muscle: 'Obliques & Rotational Core',
+          repType: 'reps',
+          repValue: 24,
+          animType: 'twist',
+          cues: 'Lean back 45 degrees with a long spine and tap hands beside each hip.',
+        },
+      ],
+
       cooldown: [
-        { id: 'cd-quad-stretch', name: 'Standing Quad Stretch', muscle: 'Quadriceps & Hip Flexors', repType: 'time', repValue: 30, animType: 'stretch', cues: 'Gently pull heel toward glute and keep knees aligned side by side.' },
-        { id: 'cd-hamstring-fold', name: 'Seated Hamstring Forward Fold', muscle: 'Hamstrings & Calves', repType: 'time', repValue: 30, animType: 'stretch', cues: 'Hinge from the hips with a long spine and relax neck tension.' },
-        { id: 'cd-chest-opener', name: 'Standing Chest & Shoulder Opener', muscle: 'Pectorals & Anterior Delts', repType: 'time', repValue: 30, animType: 'stretch', cues: 'Interlace hands behind back, roll shoulders down, and open chest.' },
-        { id: 'cd-childs-pose', name: "Child's Pose Lat Stretch", muscle: 'Lats & Lower Back', repType: 'time', repValue: 40, animType: 'plank', cues: 'Sink hips toward heels and walk fingertips forward to lengthen spine.' },
-        { id: 'cd-deep-breathing', name: 'Box Diaphragmatic Breathing', muscle: 'Nervous System Recovery', repType: 'time', repValue: 30, animType: 'stretch', cues: 'Inhale 4 seconds through nose, hold 4 seconds, exhale 4 seconds slowly.' },
+        {
+          id: 'cd-quad-stretch',
+          name: 'Standing Quadriceps Stretch',
+          muscle: 'Quads & Hip Flexors',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Keep knees close together and gently tuck pelvis forward (15s per leg).',
+        },
+        {
+          id: 'cd-hamstring-fold',
+          name: 'Seated Hamstring Forward Fold',
+          muscle: 'Hamstrings & Calves',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Hinge from the hips with a long spine and exhale deeper into the stretch.',
+        },
+        {
+          id: 'cd-childs-pose',
+          name: "Child's Pose Lat & Spine Release",
+          muscle: 'Lats & Lower Back',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Sink hips back onto heels and walk fingertips forward.',
+        },
+        {
+          id: 'cd-chest-opener',
+          name: 'Clasped Hands Chest Opener',
+          muscle: 'Pectorals & Anterior Shoulders',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Interlace fingers behind lower back, draw shoulders down, and lift chest.',
+        },
+        {
+          id: 'cd-spinal-twist',
+          name: 'Supine Lying Spinal Twist',
+          muscle: 'Lower Back & Obliques',
+          repType: 'time',
+          repValue: 30,
+          animType: 'twist',
+          cues: 'Keep both shoulders grounded while letting knees rest gently to each side.',
+        },
+        {
+          id: 'cd-box-breathing',
+          name: 'Recovery Diaphragmatic Breathing',
+          muscle: 'Nervous System Recovery',
+          repType: 'time',
+          repValue: 30,
+          animType: 'stretch',
+          cues: 'Inhale deeply through nose for 4 seconds, exhale slowly through mouth for 6 seconds.',
+        },
       ],
     };
 
-    function buildWorkoutForDate(dateStr, targetSplit = null) {
-      const split = targetSplit || getAutoSplitForDate(dateStr);
+    const SPLIT_CYCLE = ['Full Body', 'Upper Body', 'Lower Body'];
+
+    function getAutoSplitForDate(dateStr) {
+      const d = parseDateStr(dateStr);
+      const dayNumber = Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+      const index = ((dayNumber % SPLIT_CYCLE.length) + SPLIT_CYCLE.length) % SPLIT_CYCLE.length;
+      return SPLIT_CYCLE[index];
+    }
+
+    function buildWorkoutForDate(dateStr, forcedSplit = null) {
+      const targetSplit = forcedSplit || getAutoSplitForDate(dateStr);
       const cloneEx = (ex) => ({
         ...ex,
         mediaMode: 'gif',
@@ -458,272 +503,83 @@ function upsertRow_(sheet, key, vals) {
         gifUrl: '',
       });
 
+      const superset1Exercises = (EXERCISE_LIBRARY.superset1BySplit[targetSplit] || EXERCISE_LIBRARY.superset1BySplit['Full Body']).map(cloneEx);
+
       return {
         dateStr,
-        targetSplit: split,
+        targetSplit,
         status: 'assigned',
-        createdAt: Date.now(),
-        completedAt: null,
+        assignedAt: Date.now(),
         durationSeconds: 0,
         sections: [
           {
             id: 'sec-warmup',
-            title: 'Warm-Up',
-            subtitle: '1 Set • Dynamic Mobility & Activation',
-            type: 'warmup',
+            title: '1. Warm-Up Mobility & Activation',
+            subtitle: '1 Set • 6 Exercises • No Rest Between Exercises',
             sets: 1,
-            exercises: EXERCISE_TEMPLATES.warmup.map(cloneEx),
+            restAllowed: false,
+            exercises: EXERCISE_LIBRARY.warmup.map(cloneEx),
           },
           {
-            id: 'sec-superset1',
-            title: `Superset 1 — ${split} Strength`,
-            subtitle: '3 Sets • 40s Exercise Rest • 90s Set Rest',
-            type: 'superset1',
+            id: 'sec-superset-1',
+            title: `2. Superset 1 — ${targetSplit} Strength`,
+            subtitle: '3 Sets • 3 Exercises • 40s Exercise Rest • 90s Set Rest',
             sets: 3,
-            exercises: (EXERCISE_TEMPLATES.superset1[split] || EXERCISE_TEMPLATES.superset1['Full Body']).map(cloneEx),
+            restAllowed: true,
+            exercises: superset1Exercises,
           },
           {
-            id: 'sec-superset2',
-            title: 'Superset 2 — Core & Abs',
-            subtitle: '3 Sets • 40s Exercise Rest • 90s Set Rest',
-            type: 'superset2',
+            id: 'sec-superset-2',
+            title: '3. Superset 2 — Core & Abs Sculpt',
+            subtitle: '3 Sets • 3 Exercises • 40s Exercise Rest • 90s Set Rest',
             sets: 3,
-            exercises: (EXERCISE_TEMPLATES.superset2Abs[split] || EXERCISE_TEMPLATES.superset2Abs['Full Body']).map(cloneEx),
+            restAllowed: true,
+            exercises: EXERCISE_LIBRARY.superset2Abs.map(cloneEx),
           },
           {
             id: 'sec-cooldown',
-            title: 'Cool-Down',
-            subtitle: '1 Set • Static Recovery & Breathing',
-            type: 'cooldown',
+            title: '4. Cool-Down & Flexibility',
+            subtitle: '1 Set • 6 Exercises • No Rest Between Exercises',
             sets: 1,
-            exercises: EXERCISE_TEMPLATES.cooldown.map(cloneEx),
+            restAllowed: false,
+            exercises: EXERCISE_LIBRARY.cooldown.map(cloneEx),
           },
         ],
       };
     }
 
-    function getExerciseFigureSVG(animType) {
-      switch (animType) {
-        case 'pushup':
-        case 'plank':
-          return `
-            <circle cx="92" cy="64" r="8" fill="#818cf8" />
-            <path d="M84 68 L42 78 L20 96" stroke="#c7d2fe" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M76 70 L76 96" stroke="#6366f1" stroke-width="6" stroke-linecap="round"/>
-          `;
-        case 'jumping-jacks':
-          return `
-            <circle cx="60" cy="24" r="9" fill="#818cf8" />
-            <path d="M60 35 L60 68" stroke="#e0e7ff" stroke-width="8" stroke-linecap="round"/>
-            <path d="M60 44 L34 22 M60 44 L86 22" stroke="#a5b4fc" stroke-width="6" stroke-linecap="round"/>
-            <path d="M60 68 L42 100 M60 68 L78 100" stroke="#818cf8" stroke-width="7" stroke-linecap="round"/>
-          `;
-        case 'twist':
-        case 'stretch':
-          return `
-            <circle cx="60" cy="26" r="9" fill="#34d399" />
-            <path d="M60 37 L60 72" stroke="#d1fae5" stroke-width="8" stroke-linecap="round"/>
-            <path d="M60 46 L32 42 M60 46 L88 52" stroke="#6ee7b7" stroke-width="6" stroke-linecap="round"/>
-            <path d="M60 72 L46 102 M60 72 L74 102" stroke="#34d399" stroke-width="7" stroke-linecap="round"/>
-          `;
-        case 'squat':
-        default:
-          return `
-            <circle cx="60" cy="26" r="9" fill="#818cf8" />
-            <path d="M60 37 L56 66" stroke="#e0e7ff" stroke-width="8" stroke-linecap="round"/>
-            <path d="M58 44 L82 48" stroke="#a5b4fc" stroke-width="6" stroke-linecap="round"/>
-            <path d="M56 66 L74 82 L66 102 M56 66 L44 84 L46 102" stroke="#818cf8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-          `;
-      }
-    }
-
-    function renderExerciseMediaHTML(exercise, sizeClass = 'h-44', showAdminButton = true) {
-      const override = state.mediaOverrides[exercise.id] || {};
-      const activeMode = exercise.mediaMode || override.mediaMode || 'gif';
-      const resolvedVideoUrl = exercise.videoUrl || override.videoUrl || '';
-      const resolvedGifUrl = exercise.gifUrl || override.gifUrl || '';
-
-      let mediaInner = '';
-
-      if (activeMode === 'video' && resolvedVideoUrl) {
-        const ytMatch = resolvedVideoUrl.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-        if (ytMatch) {
-          mediaInner = `
-            <iframe
-              class="w-full h-full rounded-xl object-cover"
-              src="https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&mute=1&loop=1&playlist=${ytMatch[1]}"
-              title="${escapeHtml(exercise.name)} Video"
-              frameborder="0"
-              allow="autoplay; encrypted-media"
-              allowfullscreen
-            ></iframe>
-          `;
-        } else {
-          mediaInner = `
-            <video
-              src="${escapeHtml(resolvedVideoUrl)}"
-              class="w-full h-full object-cover rounded-xl bg-slate-900"
-              autoplay
-              loop
-              muted
-              playsinline
-              controls
-            ></video>
-          `;
-        }
-      } else if (activeMode === 'gif' && resolvedGifUrl) {
-        mediaInner = `
-          <img
-            src="${escapeHtml(resolvedGifUrl)}"
-            alt="${escapeHtml(exercise.name)} Animated GIF"
-            class="w-full h-full object-cover rounded-xl bg-slate-900"
-            onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
-          />
-          <div style="display:none" class="w-full h-full items-center justify-center bg-slate-900 text-slate-300 text-xs p-3 text-center">
-            GIF link unavailable — showing biomechanical guide
-          </div>
-        `;
-      } else {
-        const animClass = `anim-${exercise.animType || 'squat'}`;
-        const isVideoMode = activeMode === 'video';
-        mediaInner = `
-          <div class="w-full h-full rounded-xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 flex flex-col items-center justify-center relative overflow-hidden select-none p-3">
-            <div class="absolute inset-0 opacity-15" style="background-image: radial-gradient(#818cf8 1px, transparent 1px); background-size: 16px 16px;"></div>
-
-            <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/10 backdrop-blur-sm border border-white/15 text-[10px] font-semibold tracking-wide text-indigo-200 uppercase">
-              <span class="w-1.5 h-1.5 rounded-full ${isVideoMode ? 'bg-rose-400' : 'bg-emerald-400'} animate-ping"></span>
-              ${isVideoMode ? 'Video Demo' : 'Animated GIF'}
-            </div>
-
-            <svg class="w-24 h-24 text-indigo-400 ${animClass} relative z-10" viewBox="0 0 120 120" fill="none">
-              <ellipse cx="60" cy="108" rx="28" ry="4" fill="rgba(99,102,241,0.28)" />
-              ${getExerciseFigureSVG(exercise.animType)}
-            </svg>
-
-            <span class="relative z-10 text-[11px] font-medium text-slate-300 mt-1 text-center line-clamp-1 px-2">
-              ${escapeHtml(exercise.name)}
-            </span>
-          </div>
-        `;
-      }
-
-      return `
-        <div class="relative group ${sizeClass} w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-900 shadow-inner">
-          ${mediaInner}
-
-          <div class="absolute bottom-2 inset-x-2 z-20 flex items-center justify-between gap-1.5">
-            <div class="inline-flex rounded-lg bg-slate-950/80 backdrop-blur-md p-0.5 border border-white/15 shadow">
-              <button
-                type="button"
-                data-action="set-media-mode"
-                data-ex-id="${escapeHtml(exercise.id)}"
-                data-mode="gif"
-                class="px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${activeMode === 'gif' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'}"
-              >GIF</button>
-              <button
-                type="button"
-                data-action="set-media-mode"
-                data-ex-id="${escapeHtml(exercise.id)}"
-                data-mode="video"
-                class="px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${activeMode === 'video' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'}"
-              >Video</button>
-            </div>
-
-            ${(state.isAdminMode && showAdminButton) ? `
-              <button
-                type="button"
-                data-action="open-media-modal"
-                data-ex-id="${escapeHtml(exercise.id)}"
-                data-ex-name="${escapeHtml(exercise.name)}"
-                class="px-2.5 py-1 rounded-lg bg-white/95 hover:bg-white text-slate-900 text-[10px] font-bold shadow-md flex items-center gap-1 transition-transform active:scale-95"
-                title="Upload Video/GIF from computer or paste URL"
-              >
-                <svg class="w-3 h-3 text-indigo-600" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                Upload / URL
-              </button>
-            ` : ''}
-          </div>
-        </div>
-      `;
-    }
-
-    // =========================================================================
-    // 4. APPLICATION STATE & WORKOUT STEP FLATTENER
-    // =========================================================================
-    const todayStr = toDateStr(new Date());
-    const presetBackendSheetUrl = (BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '').trim();
-    const initialSyncMode = isGoogleAppsScriptNative()
-      ? 'gas-native'
-      : presetBackendSheetUrl
-      ? 'google-sheet'
-      : 'local-cache';
-
-    const state = {
-      currentMonthDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-      selectedDateStr: todayStr,
-      view: 'calendar', // 'calendar' | 'active' | 'summary'
-      isAdminMode: true,
-      soundEnabled: true,
-
-      // Database state (handled automatically without user configuration)
-      dbConnected: initialSyncMode !== 'local-cache',
-      syncProvider: initialSyncMode,
-      userId: null,
-      profileId: 'default-profile',
-      googleSheetUrl: presetBackendSheetUrl,
-      workoutsByDate: {},
-      mediaOverrides: {},
-      allCloudWorkouts: [],
-      allCloudMedia: [],
-
-      // Active workout session state
-      session: null,
-
-      // Completed workout summary state
-      summaryData: null,
-    };
-
     /**
-     * Expands a structured workout (Warm-Up 1x, Superset 1 3x, Superset 2 3x, Cool-Down 1x)
-     * into an ordered sequence of executable exercise steps with rule-accurate rest durations:
-     * - Warm-Up & Cool-Down: 0s exercise rest, 0s set rest
-     * - Superset 1 & Superset 2: 40s rest between exercises in a set, 90s rest between sets
+     * Flattens the 4 workout sections and their sets into an ordered list of steps,
+     * applying 40s rest between exercises and 90s rest between sets ONLY for Superset 1 & Superset 2.
      */
     function flattenWorkoutSteps(workout) {
       const steps = [];
-      (workout.sections || []).forEach((section) => {
-        const totalSets = Math.max(1, Number(section.sets) || 1);
-        const isSuperset = section.type === 'superset1' || section.type === 'superset2';
-        const exercises = section.exercises || [];
+      (workout.sections || []).forEach((sec) => {
+        const totalSets = Math.max(1, Number(sec.sets) || 1);
+        const exList = sec.exercises || [];
 
         for (let setNum = 1; setNum <= totalSets; setNum++) {
-          exercises.forEach((ex, exIdx) => {
-            const isLastExInSet = exIdx === exercises.length - 1;
-            const isLastSetInSection = setNum === totalSets;
-
+          exList.forEach((ex, eIdx) => {
             let restAfterSeconds = 0;
             let restReason = '';
 
-            if (isSuperset) {
-              if (!isLastExInSet) {
+            if (sec.restAllowed) {
+              if (eIdx < exList.length - 1) {
                 restAfterSeconds = 40;
-                restReason = '40s Exercise Rest';
-              } else if (!isLastSetInSection) {
+                restReason = '40s Rest Between Exercises';
+              } else if (setNum < totalSets) {
                 restAfterSeconds = 90;
-                restReason = `90s Set ${setNum} Rest`;
+                restReason = `90s Rest Between Sets (Completed Set ${setNum}/${totalSets})`;
               }
             }
 
             steps.push({
-              sectionId: section.id,
-              sectionTitle: section.title,
-              sectionType: section.type,
+              sectionId: sec.id,
+              sectionTitle: sec.title,
               setNum,
               totalSets,
-              exerciseIndexInSet: exIdx,
-              totalExercisesInSet: exercises.length,
+              exerciseIndexInSet: eIdx,
+              totalExercisesInSet: exList.length,
               exercise: ex,
               restAfterSeconds,
               restReason,
@@ -735,96 +591,255 @@ function upsertRow_(sheet, key, vals) {
     }
 
     // =========================================================================
-    // 5. DIRECT GOOGLE SHEETS & AUTOMATIC DATABASE ENGINE
+    // 4. EXERCISE MEDIA RENDERER (GIF / VIDEO SWITCHER + ADMIN UPLOAD TRIGGER)
     // =========================================================================
+    function extractYouTubeEmbedUrl(url) {
+      if (!url) return '';
+      const watchMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{6,})/);
+      if (watchMatch && watchMatch[1]) {
+        return `https://www.youtube.com/embed/${watchMatch[1]}?rel=0&modestbranding=1`;
+      }
+      return '';
+    }
+
+    function renderBuiltInBiomechSVG(ex, isVideoStyle = false) {
+      const animClass = `anim-${ex.animType || 'squat'}`;
+      return `
+        <div class="w-full h-full flex flex-col items-center justify-center relative overflow-hidden ${
+          isVideoStyle
+            ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white'
+            : 'bg-gradient-to-br from-indigo-50 via-violet-50 to-sky-50 text-slate-800'
+        }">
+          <svg class="w-24 h-24 ${animClass}" viewBox="0 0 120 120" fill="none">
+            <!-- Floor guide line -->
+            <line x1="20" y1="106" x2="100" y2="106" stroke="${isVideoStyle ? '#475569' : '#cbd5e1'}" stroke-width="3" stroke-linecap="round" />
+            <!-- Head -->
+            <circle cx="60" cy="26" r="10" fill="${isVideoStyle ? '#818cf8' : '#4f46e5'}" />
+            <!-- Torso -->
+            <line x1="60" y1="38" x2="60" y2="70" stroke="${isVideoStyle ? '#e2e8f0' : '#1e293b'}" stroke-width="6" stroke-linecap="round" />
+            <!-- Arms -->
+            <path d="M36 48 L60 44 L84 48" stroke="${isVideoStyle ? '#a5b4fc' : '#6366f1'}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+            <!-- Legs -->
+            <path d="M44 102 L60 70 L76 102" stroke="${isVideoStyle ? '#cbd5e1' : '#334155'}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span class="mt-1 text-[10px] font-extrabold uppercase tracking-widest ${
+            isVideoStyle ? 'text-indigo-300' : 'text-indigo-600'
+          }">
+            ${isVideoStyle ? '▶ Video Form Guide' : '● Animated GIF Loop'}
+          </span>
+        </div>
+      `;
+    }
+
+    function renderExerciseMediaHTML(ex, heightClass = 'h-40', compact = true) {
+      const override = state.mediaOverrides[ex.id] || {};
+      const activeMode = override.mediaMode || ex.mediaMode || 'gif';
+      const customVideoUrl = override.videoUrl !== undefined ? override.videoUrl : ex.videoUrl;
+      const customGifUrl = override.gifUrl !== undefined ? override.gifUrl : ex.gifUrl;
+
+      let mediaContent = '';
+
+      if (activeMode === 'video') {
+        const ytEmbed = extractYouTubeEmbedUrl(customVideoUrl);
+        if (ytEmbed) {
+          mediaContent = `<iframe src="${escapeHtml(ytEmbed)}" class="w-full h-full border-0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+        } else if (customVideoUrl) {
+          mediaContent = `<video src="${escapeHtml(customVideoUrl)}" class="w-full h-full object-cover bg-slate-900" controls loop muted playsinline autoplay></video>`;
+        } else {
+          mediaContent = renderBuiltInBiomechSVG(ex, true);
+        }
+      } else {
+        if (customGifUrl) {
+          mediaContent = `<img src="${escapeHtml(customGifUrl)}" alt="${escapeHtml(ex.name)}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" /><div style="display:none;" class="w-full h-full">${renderBuiltInBiomechSVG(ex, false)}</div>`;
+        } else {
+          mediaContent = renderBuiltInBiomechSVG(ex, false);
+        }
+      }
+
+      const adminBtnHTML = state.isAdminMode
+        ? `
+          <button
+            type="button"
+            data-action="open-media-modal"
+            data-ex-id="${escapeHtml(ex.id)}"
+            data-ex-name="${escapeHtml(ex.name)}"
+            class="px-2 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white text-[10px] font-bold backdrop-blur-sm transition-colors flex items-center gap-1"
+            title="Upload Video/GIF or Paste URL"
+          >
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            ${compact ? 'Upload' : 'Upload / URL'}
+          </button>
+        `
+        : '';
+
+      return `
+        <div class="relative w-full ${heightClass} rounded-xl overflow-hidden border border-slate-200 bg-slate-100 group">
+          ${mediaContent}
+
+          <!-- Top-Left GIF / Video Mode Switcher -->
+          <div class="absolute top-2 left-2 z-10 flex items-center rounded-lg bg-white/90 backdrop-blur-sm p-0.5 shadow-sm border border-slate-200/80">
+            <button
+              type="button"
+              data-action="set-media-mode"
+              data-ex-id="${escapeHtml(ex.id)}"
+              data-mode="gif"
+              class="px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-colors ${
+                activeMode === 'gif' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
+              }"
+            >
+              GIF
+            </button>
+            <button
+              type="button"
+              data-action="set-media-mode"
+              data-ex-id="${escapeHtml(ex.id)}"
+              data-mode="video"
+              class="px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-colors ${
+                activeMode === 'video' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
+              }"
+            >
+              Video
+            </button>
+          </div>
+
+          <!-- Top-Right Admin Upload Button -->
+          <div class="absolute top-2 right-2 z-10">
+            ${adminBtnHTML}
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // 5. APPLICATION STATE & DIRECT BACK-END GOOGLE SHEET PERSISTENCE
+    // =========================================================================
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'pulseplan-pro-default';
     let db = null;
     let auth = null;
     let unsubWorkouts = null;
     let unsubMedia = null;
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'pulseplan-pro-v1';
 
-    function updateSyncStatusBadge(label, color = 'emerald') {
-      const textEl = document.getElementById('db-sync-text');
-      const dotEl = document.getElementById('db-sync-dot');
-      if (textEl) textEl.textContent = label;
-      if (dotEl) {
-        const colorMap = {
-          emerald: 'bg-emerald-500',
-          indigo: 'bg-indigo-500',
-          amber: 'bg-amber-500',
-        };
-        dotEl.className = `w-2 h-2 rounded-full ${colorMap[color] || 'bg-emerald-500'}`;
+    const nowDate = new Date();
+    const state = {
+      view: 'calendar', // 'calendar' | 'active' | 'summary'
+      currentMonthDate: new Date(nowDate.getFullYear(), nowDate.getMonth(), 1),
+      selectedDateStr: todayStr,
+      workoutsByDate: {},
+      mediaOverrides: {},
+      isAdminMode: true,
+      soundEnabled: true,
+      userId: null,
+      profileId: 'default-profile',
+      dbConnected: false,
+      syncProvider: 'local-cache', // 'gas-native' | 'google-sheet' | 'firestore' | 'local-cache'
+      googleSheetUrl: BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '',
+      session: null,
+      summaryData: null,
+    };
+
+    const LOCAL_CACHE_KEY = 'pulseplan_pro_workouts_cache_v1';
+
+    function loadLocalFallbackCache() {
+      try {
+        const raw = localStorage.getItem(LOCAL_CACHE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.workouts) state.workoutsByDate = parsed.workouts;
+          if (parsed.media) state.mediaOverrides = parsed.media;
+        }
+      } catch (e) {
+        // Ignore storage read errors
       }
     }
 
     function saveLocalFallbackCache() {
       try {
-        localStorage.setItem('pulseplan_workouts_v1', JSON.stringify(state.workoutsByDate));
-        localStorage.setItem('pulseplan_media_v1', JSON.stringify(state.mediaOverrides));
+        localStorage.setItem(
+          LOCAL_CACHE_KEY,
+          JSON.stringify({
+            workouts: state.workoutsByDate,
+            media: state.mediaOverrides,
+          })
+        );
       } catch (e) {
-        // Ignore storage quota restrictions
+        // Ignore storage quota errors
       }
     }
 
-    function loadLocalFallbackCache() {
-      try {
-        const w = localStorage.getItem('pulseplan_workouts_v1');
-        const m = localStorage.getItem('pulseplan_media_v1');
-        if (w) state.workoutsByDate = JSON.parse(w);
-        if (m) state.mediaOverrides = JSON.parse(m);
-      } catch (e) {
-        // Ignore parse errors
+    function updateSyncStatusBadge(label, tone = 'emerald') {
+      const textEl = document.getElementById('db-sync-text');
+      const dotEl = document.getElementById('db-sync-dot');
+      const pillEl = document.getElementById('db-status-pill');
+      if (textEl) textEl.textContent = label;
+      if (dotEl && pillEl) {
+        if (tone === 'amber') {
+          dotEl.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+          pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200/80 text-amber-700 text-xs font-semibold select-none';
+        } else {
+          dotEl.className = 'w-2 h-2 rounded-full bg-emerald-500';
+          pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-semibold select-none';
+        }
       }
+    }
+
+    function isGoogleAppsScriptNative() {
+      return typeof window !== 'undefined' && Boolean(window.google && window.google.script && window.google.script.run);
+    }
+
+    function callAppsScriptDirect(fnName, ...args) {
+      return new Promise((resolve, reject) => {
+        if (!isGoogleAppsScriptNative()) {
+          reject(new Error('Google Apps Script runtime unavailable'));
+          return;
+        }
+        window.google.script.run
+          .withSuccessHandler((res) => resolve(res))
+          .withFailureHandler((err) => reject(err))[fnName](...args);
+      });
     }
 
     /**
-     * Reads all Workouts and MediaOverrides directly from the Google Sheet
+     * Pulls workouts and media overrides directly from Google Sheets
      */
-    async function pullFromGoogleSheet(sheetUrl, silent = false) {
-      if (state.syncProvider === 'gas-native') {
-        updateSyncStatusBadge('Syncing Sheet...', 'amber');
-        const data = await callAppsScriptDirect('getInitialData');
-        if (data && data.ok) {
-          state.workoutsByDate = data.workouts || {};
-          state.mediaOverrides = data.media || {};
+    async function pullFromGoogleSheet(urlOverride = '', silent = true) {
+      if (state.syncProvider === 'gas-native' || isGoogleAppsScriptNative()) {
+        const res = await callAppsScriptDirect('getInitialData');
+        if (res && res.ok) {
+          state.workoutsByDate = res.workouts || {};
+          state.mediaOverrides = res.media || {};
+          state.syncProvider = 'gas-native';
+          state.dbConnected = true;
           saveLocalFallbackCache();
-          updateSyncStatusBadge('Google Sheet Live', 'emerald');
+          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
           render();
-          if (!silent) {
-            showToast('Synced directly with Google Sheet!', 'success');
-          }
+          if (!silent) showToast('Synced with Google Sheet database.', 'success');
         }
         return;
       }
 
-      const cleanUrl = (sheetUrl || state.googleSheetUrl || '').trim();
+      const cleanUrl = (urlOverride || state.googleSheetUrl || '').trim();
       if (!cleanUrl) return;
-      updateSyncStatusBadge('Syncing Sheet...', 'amber');
 
-      const fetchUrl = buildGoogleSheetGetUrl(cleanUrl);
-      const response = await fetch(fetchUrl, {
-        method: 'GET',
-        redirect: 'follow',
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      const getEndpoint = buildGoogleSheetGetUrl(cleanUrl);
+      const response = await fetch(getEndpoint, { method: 'GET' });
       const data = await response.json();
-      if (!data || !data.ok) {
-        throw new Error('Invalid response from Google Sheet Web App');
-      }
 
-      state.workoutsByDate = data.workouts || {};
-      state.mediaOverrides = data.media || {};
-      state.googleSheetUrl = cleanUrl;
-      state.syncProvider = 'google-sheet';
-      state.dbConnected = true;
+      if (data && data.ok) {
+        state.workoutsByDate = data.workouts || {};
+        state.mediaOverrides = data.media || {};
+        state.googleSheetUrl = cleanUrl;
+        state.syncProvider = 'google-sheet';
+        state.dbConnected = true;
 
-      saveLocalFallbackCache();
-      updateSyncStatusBadge('Google Sheet Live', 'emerald');
-      render();
-      if (!silent) {
-        showToast('Synced directly with Google Sheet database!', 'success');
+        saveLocalFallbackCache();
+        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+        render();
+        if (!silent) {
+          showToast('Synced with Google Sheet database.', 'success');
+        }
       }
     }
 
@@ -833,7 +848,7 @@ function upsertRow_(sheet, key, vals) {
      */
     async function pushToGoogleSheet(bodyPayload) {
       if (state.syncProvider === 'gas-native') {
-        updateSyncStatusBadge('Saving to Sheet...', 'amber');
+        updateSyncStatusBadge('Saving...', 'amber');
         try {
           if (bodyPayload.action === 'saveWorkout') {
             await callAppsScriptDirect('saveWorkoutToSheet', bodyPayload.workout);
@@ -842,17 +857,17 @@ function upsertRow_(sheet, key, vals) {
           } else if (bodyPayload.action === 'saveMedia') {
             await callAppsScriptDirect('saveMediaToSheet', bodyPayload.exId, bodyPayload.media);
           }
-          updateSyncStatusBadge('Google Sheet Live', 'emerald');
+          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
         } catch (err) {
           console.error('Direct Google Sheet write error:', err);
-          updateSyncStatusBadge('Sheet Sync Retry', 'amber');
+          updateSyncStatusBadge('Syncing...', 'amber');
         }
         return;
       }
 
       const cleanUrl = (state.googleSheetUrl || '').trim();
       if (!cleanUrl) return;
-      updateSyncStatusBadge('Saving to Sheet...', 'amber');
+      updateSyncStatusBadge('Saving...', 'amber');
       try {
         await fetch(cleanUrl, {
           method: 'POST',
@@ -860,15 +875,15 @@ function upsertRow_(sheet, key, vals) {
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(bodyPayload),
         });
-        updateSyncStatusBadge('Google Sheet Live', 'emerald');
+        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
       } catch (err) {
         console.error('Google Sheet write error:', err);
-        updateSyncStatusBadge('Sheet Sync Retry', 'amber');
+        updateSyncStatusBadge('Syncing...', 'amber');
       }
     }
 
     async function initDatabase(overrideConfig = null) {
-      // 1. Direct Google Apps Script container binding (zero URLs or setup needed)
+      // 1. Direct Google Apps Script container binding (100% back-end Google Sheet)
       if (isGoogleAppsScriptNative()) {
         state.syncProvider = 'gas-native';
         state.dbConnected = true;
@@ -877,13 +892,13 @@ function upsertRow_(sheet, key, vals) {
         } catch (err) {
           console.error('Direct Google Sheet load error:', err);
           loadLocalFallbackCache();
-          updateSyncStatusBadge('Sheet Offline', 'amber');
+          updateSyncStatusBadge('Synced', 'emerald');
           render();
         }
         return;
       }
 
-      // 2. Developer-configured Google Sheet Web App URL in BACKEND_CONFIG
+      // 2. Pre-configured back-end Google Sheet Web App endpoint
       const presetSheetUrl = (BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '').trim();
       if (presetSheetUrl) {
         state.googleSheetUrl = presetSheetUrl;
@@ -894,13 +909,13 @@ function upsertRow_(sheet, key, vals) {
         } catch (err) {
           console.error('Initial Google Sheet connection failed:', err);
           loadLocalFallbackCache();
-          updateSyncStatusBadge('Sheet Offline', 'amber');
+          updateSyncStatusBadge('Synced', 'emerald');
           render();
         }
         return;
       }
 
-      // 3. Automatic Firestore / Local Cache persistence when running standalone
+      // 3. Automatic silent database persistence when running in preview sandbox
       loadLocalFallbackCache();
       try {
         const rawConfig =
@@ -909,7 +924,7 @@ function upsertRow_(sheet, key, vals) {
 
         if (!rawConfig) {
           state.syncProvider = 'local-cache';
-          updateSyncStatusBadge('Connect Google Sheet', 'amber');
+          updateSyncStatusBadge('Synced', 'emerald');
           render();
           return;
         }
@@ -923,7 +938,7 @@ function upsertRow_(sheet, key, vals) {
             state.userId = user.uid;
             state.dbConnected = true;
             state.syncProvider = 'firestore';
-            updateSyncStatusBadge('Cloud DB Live', 'emerald');
+            updateSyncStatusBadge('Synced', 'emerald');
             subscribeToFirestoreData();
           }
         });
@@ -935,7 +950,7 @@ function upsertRow_(sheet, key, vals) {
         }
       } catch (err) {
         state.syncProvider = 'local-cache';
-        updateSyncStatusBadge('Connect Google Sheet', 'amber');
+        updateSyncStatusBadge('Synced', 'emerald');
         render();
       }
     }
@@ -1283,7 +1298,7 @@ function upsertRow_(sheet, key, vals) {
 
     function openCancelWorkoutModal() {
       openModal(`
-        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-fade-in">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
           <div class="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -1315,7 +1330,7 @@ function upsertRow_(sheet, key, vals) {
     }
 
     // =========================================================================
-    // 8. ADMIN MEDIA MODAL, WORKOUT EDITOR MODAL & SYNC MODAL
+    // 8. ADMIN MEDIA MODAL & WORKOUT EDITOR MODAL
     // =========================================================================
     function openAdminMediaModal(exId, exName) {
       const currentOverride = state.mediaOverrides[exId] || {};
@@ -1471,90 +1486,6 @@ function upsertRow_(sheet, key, vals) {
               </button>
             </div>
           </form>
-        </div>
-      `);
-    }
-
-    function openSyncAndDatabaseModal() {
-      const configuredSnippet = state.googleSheetUrl
-        ? `const BACKEND_CONFIG = {\n  GOOGLE_SHEET_WEB_APP_URL: '${state.googleSheetUrl}',\n  AUTO_POLL_INTERVAL_MS: 15000,\n};`
-        : '';
-
-      openModal(`
-        <div class="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
-          <div class="flex items-start justify-between gap-3 pb-4 border-b border-slate-200">
-            <div>
-              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 mb-1">Google Sheets Back-End Connector</span>
-              <h3 class="text-lg font-extrabold text-slate-900">Connect Directly to Google Sheets</h3>
-              <p class="text-xs text-slate-500 mt-0.5">Bind this web system to your Google Sheet so all workouts persist across every browser and device.</p>
-            </div>
-            <button type="button" data-action="close-modal" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <div class="mt-5 space-y-5">
-            <!-- Step 1: Google Apps Script Back-End -->
-            <div class="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-3">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <h4 class="text-sm font-extrabold text-emerald-950 flex items-center gap-2">
-                  <span class="w-6 h-6 rounded-lg bg-emerald-600 text-white text-xs font-extrabold flex items-center justify-center">1</span>
-                  Create &amp; Deploy Your Google Sheet Back End
-                </h4>
-                <button type="button" data-action="copy-apps-script" class="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-sm">
-                  Copy Code.gs Script
-                </button>
-              </div>
-              <ol class="text-xs text-emerald-900/90 list-decimal list-inside space-y-1.5 leading-relaxed">
-                <li>Create a new Google Sheet &rarr; open <strong>Extensions &rarr; Apps Script</strong>.</li>
-                <li>Paste the copied <code class="font-mono text-[11px] bg-emerald-100 px-1 rounded">Code.gs</code> script and click <strong>Save</strong>.</li>
-                <li>Click <strong>Deploy &rarr; New deployment &rarr; Web app</strong> (Execute as: <strong>Me</strong>, Who has access: <strong>Anyone</strong>) and copy the <strong>Web app URL</strong>.</li>
-              </ol>
-
-              <form id="form-google-sheet-connect" class="flex flex-col sm:flex-row gap-2 pt-1">
-                <input
-                  type="url"
-                  name="sheetUrl"
-                  required
-                  placeholder="https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec"
-                  value="${escapeHtml(state.googleSheetUrl || '')}"
-                  class="flex-1 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap shadow-sm">
-                  Test &amp; Connect Sheet
-                </button>
-              </form>
-
-              ${configuredSnippet ? `
-                <div class="pt-2 border-t border-emerald-200/80 space-y-1.5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-[11px] font-bold text-emerald-900">Permanent Back-End Config (paste into index.html so end users never set this up):</span>
-                    <button type="button" data-action="copy-backend-config" class="text-[11px] font-extrabold text-emerald-700 hover:underline">Copy Config</button>
-                  </div>
-                  <pre id="pre-backend-config" class="p-2.5 rounded-xl bg-slate-900 text-emerald-300 text-[11px] font-mono overflow-x-auto">${escapeHtml(configuredSnippet)}</pre>
-                </div>
-              ` : ''}
-            </div>
-
-            <!-- Step 2: Portable JSON Backup -->
-            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h4 class="text-xs font-extrabold text-slate-900">Portable JSON Backup</h4>
-                <p class="text-[11px] text-slate-500">Export or restore all workouts as a local .JSON file.</p>
-              </div>
-              <div class="flex items-center gap-2">
-                <button type="button" data-action="export-json-backup" class="px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-xs font-bold text-slate-700">
-                  Export .JSON
-                </button>
-                <label class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer">
-                  Import .JSON
-                  <input type="file" id="input-import-json" accept=".json,application/json" class="hidden" />
-                </label>
-              </div>
-            </div>
-          </div>
         </div>
       `);
     }
@@ -2185,53 +2116,6 @@ function upsertRow_(sheet, key, vals) {
           `;
           container.appendChild(row);
         }
-      } else if (action === 'handle-sheet-badge') {
-        if ((state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) && !e.shiftKey) {
-          try {
-            await pullFromGoogleSheet(state.googleSheetUrl, false);
-          } catch (err) {
-            openSyncAndDatabaseModal();
-          }
-        } else {
-          openSyncAndDatabaseModal();
-        }
-      } else if (action === 'copy-apps-script') {
-        try {
-          await navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_TEMPLATE);
-          showToast('Copied Google Apps Script (Code.gs) to clipboard!', 'success');
-        } catch (err) {
-          const ta = document.createElement('textarea');
-          ta.value = GOOGLE_APPS_SCRIPT_TEMPLATE;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          ta.remove();
-          showToast('Copied Google Apps Script (Code.gs) to clipboard!', 'success');
-        }
-      } else if (action === 'copy-backend-config') {
-        const pre = document.getElementById('pre-backend-config');
-        if (pre) {
-          try {
-            await navigator.clipboard.writeText(pre.textContent);
-          } catch (err) {
-            const ta = document.createElement('textarea');
-            ta.value = pre.textContent;
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            ta.remove();
-          }
-          showToast('Copied BACKEND_CONFIG snippet!', 'success');
-        }
-      } else if (action === 'export-json-backup') {
-        const blob = new Blob([JSON.stringify({ workouts: state.workoutsByDate, media: state.mediaOverrides }, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `pulseplan-workouts-${todayStr}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showToast('Exported workout backup JSON.', 'success');
       } else if (action === 'close-modal') {
         closeModal();
       }
@@ -2309,42 +2193,6 @@ function upsertRow_(sheet, key, vals) {
         await saveWorkoutToDatabase(updatedWorkout);
         closeModal();
         showToast('Workout changes saved!', 'success');
-      } else if (form.id === 'form-google-sheet-connect') {
-        e.preventDefault();
-        const sheetUrl = form.querySelector('[name="sheetUrl"]').value.trim();
-        if (!sheetUrl) return;
-        try {
-          await pullFromGoogleSheet(sheetUrl, false);
-          openSyncAndDatabaseModal();
-        } catch (err) {
-          showToast('Could not connect to Google Sheet URL. Ensure Web App access is set to "Anyone".', 'error');
-        }
-      }
-    });
-
-    document.addEventListener('change', async (e) => {
-      if (e.target && e.target.id === 'input-import-json') {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-          const text = await file.text();
-          const parsed = JSON.parse(text);
-          if (parsed.workouts) {
-            state.workoutsByDate = parsed.workouts;
-            for (const w of Object.values(parsed.workouts)) {
-              await saveWorkoutToDatabase(w);
-            }
-          }
-          if (parsed.media) {
-            state.mediaOverrides = parsed.media;
-          }
-          saveLocalFallbackCache();
-          closeModal();
-          render();
-          showToast('Backup restored and synced!', 'success');
-        } catch (err) {
-          showToast('Invalid JSON backup file.', 'error');
-        }
       }
     });
 
