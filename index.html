@@ -50,6 +50,11 @@
       0%, 100% { transform: scale(0.97) rotate(-2deg); }
       50% { transform: scale(1.04) rotate(2deg); }
     }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.75; }
+      70% { transform: scale(1.12); opacity: 0; }
+      100% { transform: scale(1.12); opacity: 0; }
+    }
 
     .anim-jumping-jacks { animation: anim-bounce-exercise 0.85s ease-in-out infinite; transform-origin: bottom center; }
     .anim-squat { animation: anim-squat 1.6s ease-in-out infinite; transform-origin: bottom center; }
@@ -57,6 +62,7 @@
     .anim-plank { animation: anim-plank 2.2s ease-in-out infinite; transform-origin: center; }
     .anim-twist { animation: anim-twist 1.4s ease-in-out infinite; transform-origin: center; }
     .anim-stretch { animation: anim-stretch 2.6s ease-in-out infinite; transform-origin: center; }
+    .anim-pulse-ring { animation: pulse-ring 1.8s cubic-bezier(0.24, 0, 0.38, 1) infinite; }
 
     /* Smooth scrollbars */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -88,7 +94,7 @@
       <!-- Right Controls: Admin Toggle, Sound Toggle, Today Jump, Back-End Database Indicator -->
       <div class="flex items-center gap-2 sm:gap-3">
         <!-- Admin Mode Toggle -->
-        <button id="btn-toggle-admin" type="button" class="px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/70" title="Toggle Admin Media Upload Controls">
+        <button id="btn-toggle-admin" type="button" class="px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100" title="Toggle Admin Media Upload Controls">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
@@ -107,11 +113,11 @@
         </button>
 
         <!-- Jump to Today Button -->
-        <button id="btn-jump-today" type="button" class="px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/70 transition-colors">
+        <button id="btn-jump-today" type="button" class="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200/80 border border-slate-200/80 transition-colors">
           Today
         </button>
 
-        <!-- Passive Back-End Database Status Indicator (No Front-End Setup) -->
+        <!-- Passive Back-End Database Status Indicator -->
         <div id="db-status-pill" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-semibold select-none">
           <span id="db-sync-dot" class="w-2 h-2 rounded-full bg-emerald-500"></span>
           <span id="db-sync-text">Google Sheet Synced</span>
@@ -122,7 +128,7 @@
 
   <!-- Main Application Workspace -->
   <main id="app-root" class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-    <!-- Content dynamically rendered by state controller -->
+    <!-- Dynamically rendered by application state -->
   </main>
 
   <!-- Toast Notification Container (Replaces native alert) -->
@@ -139,26 +145,44 @@
 
     // =========================================================================
     // 0. PURE BACK-END GOOGLE SHEETS CONNECTION
-    // - When hosted inside Google Sheets (Extensions -> Apps Script -> Index.html),
-    //   `google.script.run` binds directly to your spreadsheet on the back end.
-    // - When hosted on an external web server, set GOOGLE_SHEET_WEB_APP_URL once
-    //   below on the back end; end users never configure anything on the front end.
+    // - Option A (Zero URL): Host Index.html inside your Google Sheet via
+    //   Extensions -> Apps Script -> Index.html (`google.script.run`).
+    // - Option B (External Host): Paste your Google Apps Script Web App URL
+    //   in GOOGLE_SHEET_WEB_APP_URL below (or pass ?sheetUrl=... in the URL).
     // =========================================================================
     const BACKEND_CONFIG = {
       GOOGLE_SHEET_WEB_APP_URL: '',
       AUTO_POLL_INTERVAL_MS: 15000,
     };
 
+    function resolveBackendSheetUrl() {
+      const configured = (BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '').trim();
+      if (configured) return configured;
+      try {
+        const params = new URLSearchParams(window.location.search);
+        return (params.get('sheetUrl') || '').trim();
+      } catch (e) {
+        return '';
+      }
+    }
+
     function buildGoogleSheetGetUrl(baseUrl) {
-      const clean = (baseUrl || '').trim();
-      if (!clean) return '';
-      return clean.includes('?') ? `${clean}&api=1` : `${clean}?api=1`;
+      if (!baseUrl) return '';
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      return `${baseUrl}${separator}api=1&_ts=${Date.now()}`;
+    }
+
+    function isGoogleAppsScriptNative() {
+      return typeof window !== 'undefined' &&
+        typeof window.google !== 'undefined' &&
+        window.google.script &&
+        window.google.script.run;
     }
 
     // =========================================================================
-    // 1. DATE, FORMATTING & SANITIZATION UTILITIES
+    // 1. DATE & FORMATTING HELPERS
     // =========================================================================
-    function toDateStr(dateObj) {
+    function formatDateStr(dateObj) {
       const y = dateObj.getFullYear();
       const m = String(dateObj.getMonth() + 1).padStart(2, '0');
       const d = String(dateObj.getDate()).padStart(2, '0');
@@ -166,22 +190,25 @@
     }
 
     function parseDateStr(dateStr) {
-      const [y, m, d] = (dateStr || '').split('-').map(Number);
-      if (!y || !m || !d) return new Date();
-      return new Date(y, m - 1, d);
+      const [y, m, d] = String(dateStr).split('-').map(Number);
+      return new Date(y, (m || 1) - 1, d || 1);
     }
 
-    function formatReadableDate(dateStr) {
+    function getTodayStr() {
+      return formatDateStr(new Date());
+    }
+
+    function formatDisplayDate(dateStr) {
       const d = parseDateStr(dateStr);
       return d.toLocaleDateString('en-US', {
         weekday: 'long',
-        month: 'short',
+        month: 'long',
         day: 'numeric',
         year: 'numeric',
       });
     }
 
-    function formatDuration(totalSeconds) {
+    function formatDurationClock(totalSeconds) {
       const safe = Math.max(0, Math.floor(Number(totalSeconds) || 0));
       const hrs = Math.floor(safe / 3600);
       const mins = Math.floor((safe % 3600) / 60);
@@ -201,14 +228,50 @@
         .replace(/'/g, '&#39;');
     }
 
-    const todayStr = toDateStr(new Date());
+    // =========================================================================
+    // 2. APPLICATION STATE & STORAGE KEYS
+    // =========================================================================
+    const todayDateObj = new Date();
+    const initialTodayStr = formatDateStr(todayDateObj);
+
+    const state = {
+      view: 'calendar', // 'calendar' | 'workout' | 'session' | 'summary'
+      currentYear: todayDateObj.getFullYear(),
+      currentMonth: todayDateObj.getMonth(),
+      selectedDate: initialTodayStr,
+      selectedSplitOverride: 'AUTO',
+      workoutsByDate: {},
+      mediaOverrides: {},
+      adminMode: true,
+      soundEnabled: true,
+      userId: null,
+      profileId: 'default-profile',
+      dbConnected: false,
+      syncProvider: 'local-cache', // 'gas-native' | 'google-sheet' | 'firestore' | 'local-cache'
+      googleSheetUrl: resolveBackendSheetUrl(),
+      session: null,
+      summaryData: null,
+    };
+
+    const LOCAL_CACHE_KEY = 'pulseplan_pro_workouts_cache_v1';
+    const LOCAL_MEDIA_KEY = 'pulseplan_pro_media_cache_v1';
+
+    let db = null;
+    let auth = null;
+    let unsubWorkouts = null;
+    let unsubMedia = null;
+    let pollIntervalHandle = null;
+    let masterTimerHandle = null;
+    let stepTimerHandle = null;
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'pulseplan-pro-default';
 
     // =========================================================================
-    // 2. WEB AUDIO SYNTHESIZER FOR WORKOUT & REST TIMER CUES
+    // 3. WEB AUDIO API CUES (No External Audio URLs)
     // =========================================================================
     let audioCtx = null;
 
-    function playTone(freq = 520, duration = 0.14, type = 'sine', delay = 0) {
+    function playTone(freq = 660, durationSec = 0.14, type = 'sine', delaySec = 0) {
       if (!state.soundEnabled) return;
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -216,746 +279,564 @@
         if (!audioCtx) audioCtx = new AudioContextClass();
         if (audioCtx.state === 'suspended') audioCtx.resume();
 
+        const now = audioCtx.currentTime + delaySec;
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = type;
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + delay);
-
-        gain.gain.setValueAtTime(0.001, audioCtx.currentTime + delay);
-        gain.gain.exponentialRampToValueAtTime(0.14, audioCtx.currentTime + delay + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + delay + duration);
-
+        osc.frequency.setValueAtTime(freq, now);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        osc.start(audioCtx.currentTime + delay);
-        osc.stop(audioCtx.currentTime + delay + duration + 0.02);
+        osc.start(now);
+        osc.stop(now + durationSec + 0.02);
       } catch (e) {
-        // Ignore audio autoplay restriction errors
+        // Ignore audio restrictions if user has not interacted yet
       }
     }
 
-    function playChimeComplete() {
-      playTone(587.33, 0.12, 'triangle', 0);
-      playTone(880.0, 0.2, 'triangle', 0.12);
+    function playTickCue() {
+      playTone(520, 0.07, 'sine', 0);
     }
 
-    function playWorkoutFanfare() {
+    function playStepCompleteCue() {
+      playTone(587.33, 0.12, 'triangle', 0);
+      playTone(880, 0.2, 'triangle', 0.12);
+    }
+
+    function playWorkoutFinishCue() {
       playTone(523.25, 0.14, 'triangle', 0);
       playTone(659.25, 0.14, 'triangle', 0.14);
       playTone(783.99, 0.14, 'triangle', 0.28);
-      playTone(1046.5, 0.32, 'triangle', 0.42);
+      playTone(1046.5, 0.35, 'triangle', 0.42);
     }
 
     // =========================================================================
-    // 3. EXERCISE LIBRARY & STRUCTURED WORKOUT GENERATOR
+    // 4. TOAST & MODAL HELPERS (Replaces alert() and confirm())
+    // =========================================================================
+    function showToast(message, tone = 'indigo') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const palette = {
+        indigo: 'bg-slate-900 text-white border-slate-700',
+        emerald: 'bg-emerald-900 text-white border-emerald-700',
+        amber: 'bg-amber-900 text-white border-amber-700',
+        rose: 'bg-rose-900 text-white border-rose-700',
+      };
+
+      const toast = document.createElement('div');
+      toast.className = `pointer-events-auto px-4 py-3 rounded-xl border shadow-lg text-xs font-semibold flex items-center justify-between gap-3 transition-all duration-300 transform translate-y-2 opacity-0 ${palette[tone] || palette.indigo}`;
+      toast.innerHTML = `
+        <span>${escapeHtml(message)}</span>
+        <button type="button" class="text-white/70 hover:text-white text-sm font-bold leading-none">&times;</button>
+      `;
+      container.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      const removeToast = () => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 250);
+      };
+
+      toast.querySelector('button').addEventListener('click', removeToast);
+      setTimeout(removeToast, 3400);
+    }
+
+    function openModal(innerHTML) {
+      const modalRoot = document.getElementById('modal-root');
+      if (!modalRoot) return;
+      modalRoot.innerHTML = innerHTML;
+      modalRoot.classList.remove('hidden');
+      modalRoot.classList.add('flex');
+    }
+
+    function closeModal() {
+      const modalRoot = document.getElementById('modal-root');
+      if (!modalRoot) return;
+      modalRoot.classList.add('hidden');
+      modalRoot.classList.remove('flex');
+      modalRoot.innerHTML = '';
+    }
+
+    // =========================================================================
+    // 5. EXERCISE LIBRARY & MUSCLE SPLIT GENERATOR
     // =========================================================================
     const EXERCISE_LIBRARY = {
       warmup: [
-        {
-          id: 'wu-jumping-jacks',
-          name: 'Jumping Jacks',
-          muscle: 'Full Body Cardio',
-          repType: 'time',
-          repValue: 30,
-          animType: 'jumping-jacks',
-          cues: 'Land softly on the balls of your feet and reach arms fully overhead.',
-        },
-        {
-          id: 'wu-arm-circles',
-          name: 'Dynamic Arm Circles & Shoulder Rolls',
-          muscle: 'Shoulders & Upper Back',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Perform 15 seconds forward and 15 seconds backward with tall posture.',
-        },
-        {
-          id: 'wu-torso-twists',
-          name: 'Standing Torso Rotations',
-          muscle: 'Thoracic Spine & Core',
-          repType: 'reps',
-          repValue: 16,
-          animType: 'twist',
-          cues: 'Pivot back heel smoothly and rotate shoulders side to side with control.',
-        },
-        {
-          id: 'wu-hip-hinges',
-          name: 'Bodyweight Good Mornings',
-          muscle: 'Hamstrings & Glutes',
-          repType: 'reps',
-          repValue: 12,
-          animType: 'squat',
-          cues: 'Push hips straight back with a flat spine until you feel a light hamstring stretch.',
-        },
-        {
-          id: 'wu-high-knees',
-          name: 'Brisk High-Knee March',
-          muscle: 'Hip Flexors & Pulse',
-          repType: 'time',
-          repValue: 30,
-          animType: 'jumping-jacks',
-          cues: 'Drive knees to hip height while pumping opposite arms.',
-        },
-        {
-          id: 'wu-inchworms',
-          name: 'Walkout Inchworms',
-          muscle: 'Shoulders, Core & Posterior Chain',
-          repType: 'reps',
-          repValue: 8,
-          animType: 'pushup',
-          cues: 'Walk hands out to a firm high plank, pause briefly, and walk back to standing.',
-        },
+        { id: 'wu-jacks', name: 'Jumping Jacks', repType: 'time', repValue: 30, animClass: 'anim-jumping-jacks', cue: 'Light on balls of feet, full overhead arm extension.' },
+        { id: 'wu-arm-circles', name: 'Dynamic Arm Circles & Shoulder Rolls', repType: 'time', repValue: 30, animClass: 'anim-stretch', cue: '15s forward circles, 15s backward circles to warm rotator cuffs.' },
+        { id: 'wu-hip-openers', name: 'Alternating World’s Greatest Stretch', repType: 'reps', repValue: 10, animClass: 'anim-squat', cue: 'Step into deep lunge, rotate thoracic spine toward front knee.' },
+        { id: 'wu-inchworm', name: 'Inchworm Walkouts', repType: 'reps', repValue: 8, animClass: 'anim-pushup', cue: 'Hinge at hips, walk hands out to high plank, walk back up.' },
+        { id: 'wu-high-knees', name: 'High Knee March & Twist', repType: 'time', repValue: 30, animClass: 'anim-jumping-jacks', cue: 'Drive knees to hip height while bracing core.' },
+        { id: 'wu-bw-squats', name: 'Tempo Bodyweight Squats', repType: 'reps', repValue: 12, animClass: 'anim-squat', cue: '3-second controlled descent, chest proud, knees tracking toes.' },
       ],
-
-      superset1BySplit: {
-        'Full Body': [
-          {
-            id: 'fb-goblet-squat',
-            name: 'Bodyweight Tempo Squats',
-            muscle: 'Quads, Glutes & Core',
-            repType: 'reps',
-            repValue: 15,
-            animType: 'squat',
-            cues: 'Sit hips down and back for 2 seconds, keep chest proud, drive through mid-foot.',
-          },
-          {
-            id: 'fb-pushups',
-            name: 'Standard Push-Ups',
-            muscle: 'Chest, Shoulders & Triceps',
-            repType: 'reps',
-            repValue: 12,
-            animType: 'pushup',
-            cues: 'Keep elbows at 45 degrees and maintain a rigid plank line from head to heels.',
-          },
-          {
-            id: 'fb-reverse-lunges',
-            name: 'Alternating Reverse Lunges',
-            muscle: 'Glutes, Quads & Balance',
-            repType: 'reps',
-            repValue: 16,
-            animType: 'squat',
-            cues: 'Step back softly, lower rear knee toward the floor, and push through front heel.',
-          },
-        ],
-        'Upper Body': [
-          {
-            id: 'ub-pushups',
-            name: 'Chest-Focused Push-Ups',
-            muscle: 'Pectorals & Anterior Delts',
-            repType: 'reps',
-            repValue: 14,
-            animType: 'pushup',
-            cues: 'Lower chest between hands with control and press explosively back to lockout.',
-          },
-          {
-            id: 'ub-pike-press',
-            name: 'Pike Shoulder Presses',
-            muscle: 'Shoulders & Triceps',
-            repType: 'reps',
-            repValue: 10,
-            animType: 'pushup',
-            cues: 'Hinge hips high into an inverted V and lower crown of head toward floor.',
-          },
-          {
-            id: 'ub-prone-ytw',
-            name: 'Prone Back Squeeze & Raises',
-            muscle: 'Upper Back & Rear Delts',
-            repType: 'reps',
-            repValue: 15,
-            animType: 'plank',
-            cues: 'Pinch shoulder blades together and lift arms slightly off the mat without shrugging.',
-          },
-        ],
-        'Lower Body': [
-          {
-            id: 'lb-sumo-squat',
-            name: 'Wide-Stance Sumo Squats',
-            muscle: 'Inner Thighs, Glutes & Quads',
-            repType: 'reps',
-            repValue: 16,
-            animType: 'squat',
-            cues: 'Turn toes out 30 degrees, track knees over toes, and squeeze glutes at top.',
-          },
-          {
-            id: 'lb-split-squat',
-            name: 'Bulgarian / Split Squats',
-            muscle: 'Quads & Glutes',
-            repType: 'reps',
-            repValue: 14,
-            animType: 'squat',
-            cues: 'Keep 80% of weight on front foot and drop hips straight down.',
-          },
-          {
-            id: 'lb-glute-bridge',
-            name: 'Single-Leg / Glute Bridges',
-            muscle: 'Glutes & Hamstrings',
-            repType: 'reps',
-            repValue: 18,
-            animType: 'plank',
-            cues: 'Drive through heels, tuck pelvis slightly, and hold peak contraction for 1 second.',
-          },
-        ],
-      },
-
-      superset2Abs: [
-        {
-          id: 'abs-forearm-plank',
-          name: 'Forearm Hollow Plank',
-          muscle: 'Transverse Abdominis & Core',
-          repType: 'time',
-          repValue: 30,
-          animType: 'plank',
-          cues: 'Brace abs tightly as if expecting a punch and press forearms firmly into the floor.',
-        },
-        {
-          id: 'abs-bicycle-crunch',
-          name: 'Controlled Bicycle Crunches',
-          muscle: 'Obliques & Rectus Abdominis',
-          repType: 'reps',
-          repValue: 20,
-          animType: 'twist',
-          cues: 'Rotate ribcage toward opposite knee while extending the other leg fully.',
-        },
-        {
-          id: 'abs-russian-twists',
-          name: 'Seated Russian Twists',
-          muscle: 'Obliques & Rotational Core',
-          repType: 'reps',
-          repValue: 24,
-          animType: 'twist',
-          cues: 'Lean back 45 degrees with a long spine and tap hands beside each hip.',
-        },
+      fullBody: [
+        { id: 'fb-squat-press', name: 'Dumbbell Thrusters (Squat to Press)', repType: 'reps', repValue: 12, animClass: 'anim-squat', cue: 'Drive upward through heels and use momentum to press overhead.' },
+        { id: 'fb-pushup-row', name: 'Push-Up to Renegade Row', repType: 'reps', repValue: 10, animClass: 'anim-pushup', cue: 'Keep hips square to the floor during each alternating row.' },
+        { id: 'fb-rev-lunge', name: 'Alternating Reverse Lunges', repType: 'reps', repValue: 14, animClass: 'anim-squat', cue: 'Step back softly, 90-degree bend in both knees, drive up.' },
       ],
-
+      upperBody: [
+        { id: 'ub-pushups', name: 'Tempo Chest Push-Ups', repType: 'reps', repValue: 14, animClass: 'anim-pushup', cue: 'Elbows at 45 degrees, lower chest to floor, press explosively.' },
+        { id: 'ub-bent-row', name: 'Bent-Over Double Arm Rows', repType: 'reps', repValue: 12, animClass: 'anim-pushup', cue: 'Flat back at 45-degree hinge, squeeze shoulder blades together.' },
+        { id: 'ub-pike-press', name: 'Pike Shoulder Press', repType: 'reps', repValue: 10, animClass: 'anim-pushup', cue: 'Hips high in inverted V, lower crown of head toward floor.' },
+      ],
+      lowerBody: [
+        { id: 'lb-goblet-squat', name: 'Deep Goblet Squats', repType: 'reps', repValue: 15, animClass: 'anim-squat', cue: 'Sit between heels, keep torso upright, pause 1s at bottom.' },
+        { id: 'lb-rdl', name: 'Romanian Hip Hinge Deadlifts', repType: 'reps', repValue: 12, animClass: 'anim-squat', cue: 'Push hips straight back until hamstrings load, squeeze glutes up.' },
+        { id: 'lb-split-squat', name: 'Bulgarian Split Squats', repType: 'reps', repValue: 10, animClass: 'anim-squat', cue: 'Rear foot elevated, vertical front shin, drive through front heel.' },
+      ],
+      abs: [
+        { id: 'ab-plank', name: 'Forearm RKC Hollow Plank', repType: 'time', repValue: 40, animClass: 'anim-plank', cue: 'Tuck pelvis slightly, brace abs hard, press forearms into mat.' },
+        { id: 'ab-bicycle', name: 'Controlled Bicycle Crunches', repType: 'reps', repValue: 20, animClass: 'anim-twist', cue: 'Bring opposite shoulder toward knee while extending other leg.' },
+        { id: 'ab-leg-raises', name: 'Lying Straight-Leg Raises', repType: 'reps', repValue: 14, animClass: 'anim-plank', cue: 'Press lower back into floor, lower legs slowly without arching.' },
+      ],
       cooldown: [
-        {
-          id: 'cd-quad-stretch',
-          name: 'Standing Quadriceps Stretch',
-          muscle: 'Quads & Hip Flexors',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Keep knees close together and gently tuck pelvis forward (15s per leg).',
-        },
-        {
-          id: 'cd-hamstring-fold',
-          name: 'Seated Hamstring Forward Fold',
-          muscle: 'Hamstrings & Calves',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Hinge from the hips with a long spine and exhale deeper into the stretch.',
-        },
-        {
-          id: 'cd-childs-pose',
-          name: "Child's Pose Lat & Spine Release",
-          muscle: 'Lats & Lower Back',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Sink hips back onto heels and walk fingertips forward.',
-        },
-        {
-          id: 'cd-chest-opener',
-          name: 'Clasped Hands Chest Opener',
-          muscle: 'Pectorals & Anterior Shoulders',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Interlace fingers behind lower back, draw shoulders down, and lift chest.',
-        },
-        {
-          id: 'cd-spinal-twist',
-          name: 'Supine Lying Spinal Twist',
-          muscle: 'Lower Back & Obliques',
-          repType: 'time',
-          repValue: 30,
-          animType: 'twist',
-          cues: 'Keep both shoulders grounded while letting knees rest gently to each side.',
-        },
-        {
-          id: 'cd-box-breathing',
-          name: 'Recovery Diaphragmatic Breathing',
-          muscle: 'Nervous System Recovery',
-          repType: 'time',
-          repValue: 30,
-          animType: 'stretch',
-          cues: 'Inhale deeply through nose for 4 seconds, exhale slowly through mouth for 6 seconds.',
-        },
+        { id: 'cd-child-pose', name: 'Child’s Pose with Lat Reach', repType: 'time', repValue: 30, animClass: 'anim-stretch', cue: 'Sink hips back onto heels, walk fingertips forward, breathe deeply.' },
+        { id: 'cd-cat-cow', name: 'Cat-Cow Spinal Mobilization', repType: 'reps', repValue: 8, animClass: 'anim-plank', cue: 'Inhale arch spine gently, exhale round upper back.' },
+        { id: 'cd-hamstring', name: 'Seated Forward Hamstring Fold', repType: 'time', repValue: 30, animClass: 'anim-stretch', cue: 'Hinge from hips with long spine, relax neck and shoulders.' },
+        { id: 'cd-figure-four', name: 'Supine Figure-4 Glute Stretch', repType: 'time', repValue: 30, animClass: 'anim-stretch', cue: 'Cross ankle over opposite knee, gently pull thigh toward chest.' },
+        { id: 'cd-chest-opener', name: 'Standing Chest & Thoracic Opener', repType: 'time', repValue: 30, animClass: 'anim-stretch', cue: 'Clasp hands behind back, open collarbones, slow nasal breaths.' },
       ],
     };
 
-    const SPLIT_CYCLE = ['Full Body', 'Upper Body', 'Lower Body'];
+    const SPLIT_ROTATION = ['Full Body', 'Upper Body', 'Lower Body'];
 
-    function getAutoSplitForDate(dateStr) {
+    function getRecommendedSplitForDate(dateStr) {
       const d = parseDateStr(dateStr);
-      const dayNumber = Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
-      const index = ((dayNumber % SPLIT_CYCLE.length) + SPLIT_CYCLE.length) % SPLIT_CYCLE.length;
-      return SPLIT_CYCLE[index];
+      const dayIndex = Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+      const idx = ((dayIndex % SPLIT_ROTATION.length) + SPLIT_ROTATION.length) % SPLIT_ROTATION.length;
+      return SPLIT_ROTATION[idx];
+    }
+
+    function cloneExercise(item, prefix) {
+      return {
+        uid: `${prefix}-${item.id}-${Math.random().toString(36).slice(2, 7)}`,
+        id: item.id,
+        name: item.name,
+        repType: item.repType,
+        repValue: item.repValue,
+        animClass: item.animClass,
+        cue: item.cue,
+        mediaMode: 'gif', // 'gif' | 'video'
+      };
     }
 
     function buildWorkoutForDate(dateStr, forcedSplit = null) {
-      const targetSplit = forcedSplit || getAutoSplitForDate(dateStr);
-      const cloneEx = (ex) => ({
-        ...ex,
-        mediaMode: 'gif',
-        videoUrl: '',
-        gifUrl: '',
-      });
+      const targetSplit = forcedSplit && forcedSplit !== 'AUTO'
+        ? forcedSplit
+        : getRecommendedSplitForDate(dateStr);
 
-      const superset1Exercises = (EXERCISE_LIBRARY.superset1BySplit[targetSplit] || EXERCISE_LIBRARY.superset1BySplit['Full Body']).map(cloneEx);
+      let mainPool = EXERCISE_LIBRARY.fullBody;
+      if (targetSplit === 'Upper Body') mainPool = EXERCISE_LIBRARY.upperBody;
+      if (targetSplit === 'Lower Body') mainPool = EXERCISE_LIBRARY.lowerBody;
 
       return {
         dateStr,
         targetSplit,
-        status: 'assigned',
-        assignedAt: Date.now(),
+        status: 'assigned', // 'assigned' | 'completed'
         durationSeconds: 0,
+        completedAt: null,
         sections: [
           {
             id: 'sec-warmup',
-            title: '1. Warm-Up Mobility & Activation',
-            subtitle: '1 Set • 6 Exercises • No Rest Between Exercises',
+            title: 'Warm-Up',
+            subtitle: 'Mobility & Heart Rate Activation (No rest between exercises)',
             sets: 1,
-            restAllowed: false,
-            exercises: EXERCISE_LIBRARY.warmup.map(cloneEx),
+            hasRest: false,
+            exercises: EXERCISE_LIBRARY.warmup.map((ex) => cloneExercise(ex, 'wu')),
           },
           {
             id: 'sec-superset-1',
-            title: `2. Superset 1 — ${targetSplit} Strength`,
-            subtitle: '3 Sets • 3 Exercises • 40s Exercise Rest • 90s Set Rest',
+            title: `1st Superset — ${targetSplit}`,
+            subtitle: '3 Sets • 40s rest between exercises • 90s rest between sets',
             sets: 3,
-            restAllowed: true,
-            exercises: superset1Exercises,
+            hasRest: true,
+            exercises: mainPool.map((ex) => cloneExercise(ex, 'ss1')),
           },
           {
             id: 'sec-superset-2',
-            title: '3. Superset 2 — Core & Abs Sculpt',
-            subtitle: '3 Sets • 3 Exercises • 40s Exercise Rest • 90s Set Rest',
+            title: '2nd Superset — Core & Abs',
+            subtitle: '3 Sets • 40s rest between exercises • 90s rest between sets',
             sets: 3,
-            restAllowed: true,
-            exercises: EXERCISE_LIBRARY.superset2Abs.map(cloneEx),
+            hasRest: true,
+            exercises: EXERCISE_LIBRARY.abs.map((ex) => cloneExercise(ex, 'ss2')),
           },
           {
             id: 'sec-cooldown',
-            title: '4. Cool-Down & Flexibility',
-            subtitle: '1 Set • 6 Exercises • No Rest Between Exercises',
+            title: 'Cool-Down',
+            subtitle: 'Recovery & Parasympathetic Down-Regulation (No rest between exercises)',
             sets: 1,
-            restAllowed: false,
-            exercises: EXERCISE_LIBRARY.cooldown.map(cloneEx),
+            hasRest: false,
+            exercises: EXERCISE_LIBRARY.cooldown.map((ex) => cloneExercise(ex, 'cd')),
           },
         ],
       };
     }
 
-    /**
-     * Flattens the 4 workout sections and their sets into an ordered list of steps,
-     * applying 40s rest between exercises and 90s rest between sets ONLY for Superset 1 & Superset 2.
-     */
+    // =========================================================================
+    // 6. FLATTEN WORKOUT INTO STEP-BY-STEP GUIDED SEQUENCE
+    // Rule 14: 40s rest between exercises ONLY in Superset 1 & Superset 2;
+    //          90s rest between sets ONLY in Superset 1 & Superset 2;
+    //          0s rest in Warm-Up and Cool-Down.
+    // =========================================================================
     function flattenWorkoutSteps(workout) {
       const steps = [];
-      (workout.sections || []).forEach((sec) => {
-        const totalSets = Math.max(1, Number(sec.sets) || 1);
-        const exList = sec.exercises || [];
+      if (!workout || !Array.isArray(workout.sections)) return steps;
+
+      workout.sections.forEach((section, secIdx) => {
+        const totalSets = Math.max(1, Number(section.sets) || 1);
+        const exercises = section.exercises || [];
+        const isSuperset = Boolean(section.hasRest);
 
         for (let setNum = 1; setNum <= totalSets; setNum++) {
-          exList.forEach((ex, eIdx) => {
-            let restAfterSeconds = 0;
-            let restReason = '';
+          exercises.forEach((ex, exIdx) => {
+            const isLastExInSet = exIdx === exercises.length - 1;
+            const isLastSetInSection = setNum === totalSets;
 
-            if (sec.restAllowed) {
-              if (eIdx < exList.length - 1) {
+            let restAfterSeconds = 0;
+            let restLabel = '';
+
+            if (isSuperset) {
+              if (!isLastExInSet) {
                 restAfterSeconds = 40;
-                restReason = '40s Rest Between Exercises';
-              } else if (setNum < totalSets) {
+                restLabel = 'Exercise Rest (40s)';
+              } else if (!isLastSetInSection) {
                 restAfterSeconds = 90;
-                restReason = `90s Rest Between Sets (Completed Set ${setNum}/${totalSets})`;
+                restLabel = `Set ${setNum} Complete — Set Rest (90s)`;
               }
             }
 
             steps.push({
-              sectionId: sec.id,
-              sectionTitle: sec.title,
+              stepIndex: steps.length,
+              sectionIndex: secIdx,
+              sectionTitle: section.title,
+              isSuperset,
               setNum,
               totalSets,
-              exerciseIndexInSet: eIdx,
-              totalExercisesInSet: exList.length,
+              exIndexInSet: exIdx,
+              totalExInSet: exercises.length,
               exercise: ex,
               restAfterSeconds,
-              restReason,
+              restLabel,
             });
           });
         }
       });
+
       return steps;
     }
 
     // =========================================================================
-    // 4. EXERCISE MEDIA RENDERER (GIF / VIDEO SWITCHER + ADMIN UPLOAD TRIGGER)
+    // 7. EXERCISE MEDIA RENDERER (Animated GIF & Video + Admin Overrides)
     // =========================================================================
-    function extractYouTubeEmbedUrl(url) {
-      if (!url) return '';
-      const watchMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{6,})/);
-      if (watchMatch && watchMatch[1]) {
-        return `https://www.youtube.com/embed/${watchMatch[1]}?rel=0&modestbranding=1`;
-      }
-      return '';
+    function getEffectiveMediaForExercise(exercise) {
+      const override = state.mediaOverrides[exercise.id] || {};
+      return {
+        mediaMode: exercise.mediaMode || override.mediaMode || 'gif',
+        gifUrl: override.gifUrl || '',
+        videoUrl: override.videoUrl || '',
+      };
     }
 
-    function renderBuiltInBiomechSVG(ex, isVideoStyle = false) {
-      const animClass = `anim-${ex.animType || 'squat'}`;
+    function renderBuiltInGifSvg(exercise) {
+      const anim = exercise.animClass || 'anim-jumping-jacks';
       return `
-        <div class="w-full h-full flex flex-col items-center justify-center relative overflow-hidden ${
-          isVideoStyle
-            ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white'
-            : 'bg-gradient-to-br from-indigo-50 via-violet-50 to-sky-50 text-slate-800'
-        }">
-          <svg class="w-24 h-24 ${animClass}" viewBox="0 0 120 120" fill="none">
-            <!-- Floor guide line -->
-            <line x1="20" y1="106" x2="100" y2="106" stroke="${isVideoStyle ? '#475569' : '#cbd5e1'}" stroke-width="3" stroke-linecap="round" />
-            <!-- Head -->
-            <circle cx="60" cy="26" r="10" fill="${isVideoStyle ? '#818cf8' : '#4f46e5'}" />
-            <!-- Torso -->
-            <line x1="60" y1="38" x2="60" y2="70" stroke="${isVideoStyle ? '#e2e8f0' : '#1e293b'}" stroke-width="6" stroke-linecap="round" />
-            <!-- Arms -->
-            <path d="M36 48 L60 44 L84 48" stroke="${isVideoStyle ? '#a5b4fc' : '#6366f1'}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
-            <!-- Legs -->
-            <path d="M44 102 L60 70 L76 102" stroke="${isVideoStyle ? '#cbd5e1' : '#334155'}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+        <div class="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white relative overflow-hidden p-3">
+          <div class="absolute inset-0 opacity-20 bg-[radial-gradient(#818cf8_1px,transparent_1px)] [background-size:14px_14px]"></div>
+          <svg class="w-24 h-24 text-indigo-400 ${anim}" viewBox="0 0 120 120" fill="none">
+            <circle cx="60" cy="24" r="10" fill="#818cf8" />
+            <path d="M60 36 L60 72" stroke="#c7d2fe" stroke-width="7" stroke-linecap="round" />
+            <path d="M60 46 L34 32 M60 46 L86 32" stroke="#a5b4fc" stroke-width="6" stroke-linecap="round" />
+            <path d="M60 72 L40 104 M60 72 L80 104" stroke="#818cf8" stroke-width="7" stroke-linecap="round" />
+            <line x1="22" y1="108" x2="98" y2="108" stroke="#475569" stroke-width="3" stroke-linecap="round" />
           </svg>
-          <span class="mt-1 text-[10px] font-extrabold uppercase tracking-widest ${
-            isVideoStyle ? 'text-indigo-300' : 'text-indigo-600'
-          }">
-            ${isVideoStyle ? '▶ Video Form Guide' : '● Animated GIF Loop'}
+          <span class="mt-1 px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-[10px] font-bold uppercase tracking-wider text-indigo-200">
+            Animated GIF Demo
           </span>
         </div>
       `;
     }
 
-    function renderExerciseMediaHTML(ex, heightClass = 'h-40', compact = true) {
-      const override = state.mediaOverrides[ex.id] || {};
-      const activeMode = override.mediaMode || ex.mediaMode || 'gif';
-      const customVideoUrl = override.videoUrl !== undefined ? override.videoUrl : ex.videoUrl;
-      const customGifUrl = override.gifUrl !== undefined ? override.gifUrl : ex.gifUrl;
+    function renderBuiltInVideoPreview(exercise) {
+      const anim = exercise.animClass || 'anim-jumping-jacks';
+      return `
+        <div class="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white relative overflow-hidden p-3">
+          <div class="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-0.5 rounded bg-rose-600/90 text-[10px] font-bold uppercase tracking-wider">
+            <span class="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span> HD Form Review
+          </div>
+          <svg class="w-24 h-24 text-emerald-400 ${anim}" viewBox="0 0 120 120" fill="none">
+            <circle cx="60" cy="24" r="10" fill="#34d399" />
+            <path d="M60 36 L60 72" stroke="#a7f3d0" stroke-width="7" stroke-linecap="round" />
+            <path d="M60 46 L32 58 M60 46 L88 58" stroke="#6ee7b7" stroke-width="6" stroke-linecap="round" />
+            <path d="M60 72 L38 104 M60 72 L82 104" stroke="#34d399" stroke-width="7" stroke-linecap="round" />
+            <line x1="20" y1="108" x2="100" y2="108" stroke="#334155" stroke-width="3" stroke-linecap="round" />
+          </svg>
+          <div class="w-4/5 mt-2 bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div class="bg-emerald-400 h-full w-2/3 rounded-full animate-pulse"></div>
+          </div>
+          <span class="mt-1 text-[10px] text-slate-400 font-medium">Biomechanical Video Loop</span>
+        </div>
+      `;
+    }
+
+    function renderExerciseMediaHTML(exercise, heightClass = 'h-44') {
+      const media = getEffectiveMediaForExercise(exercise);
+      const isVideo = media.mediaMode === 'video';
 
       let mediaContent = '';
-
-      if (activeMode === 'video') {
-        const ytEmbed = extractYouTubeEmbedUrl(customVideoUrl);
-        if (ytEmbed) {
-          mediaContent = `<iframe src="${escapeHtml(ytEmbed)}" class="w-full h-full border-0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-        } else if (customVideoUrl) {
-          mediaContent = `<video src="${escapeHtml(customVideoUrl)}" class="w-full h-full object-cover bg-slate-900" controls loop muted playsinline autoplay></video>`;
+      if (isVideo) {
+        if (media.videoUrl) {
+          mediaContent = `
+            <video src="${escapeHtml(media.videoUrl)}" class="w-full h-full object-cover bg-slate-950" controls autoplay loop muted playsinline></video>
+          `;
         } else {
-          mediaContent = renderBuiltInBiomechSVG(ex, true);
+          mediaContent = renderBuiltInVideoPreview(exercise);
         }
       } else {
-        if (customGifUrl) {
-          mediaContent = `<img src="${escapeHtml(customGifUrl)}" alt="${escapeHtml(ex.name)}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" /><div style="display:none;" class="w-full h-full">${renderBuiltInBiomechSVG(ex, false)}</div>`;
+        if (media.gifUrl) {
+          mediaContent = `
+            <img src="${escapeHtml(media.gifUrl)}" alt="${escapeHtml(exercise.name)} GIF" class="w-full h-full object-cover bg-slate-900" onerror="this.onerror=null;this.src='https://placehold.co/480x270/0f172a/818cf8?text=Animated+GIF';" />
+          `;
         } else {
-          mediaContent = renderBuiltInBiomechSVG(ex, false);
+          mediaContent = renderBuiltInGifSvg(exercise);
         }
       }
 
-      const adminBtnHTML = state.isAdminMode
-        ? `
-          <button
-            type="button"
-            data-action="open-media-modal"
-            data-ex-id="${escapeHtml(ex.id)}"
-            data-ex-name="${escapeHtml(ex.name)}"
-            class="px-2 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white text-[10px] font-bold backdrop-blur-sm transition-colors flex items-center gap-1"
-            title="Upload Video/GIF or Paste URL"
-          >
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            ${compact ? 'Upload' : 'Upload / URL'}
-          </button>
-        `
-        : '';
-
       return `
-        <div class="relative w-full ${heightClass} rounded-xl overflow-hidden border border-slate-200 bg-slate-100 group">
+        <div class="relative ${heightClass} w-full rounded-xl overflow-hidden border border-slate-200/90 bg-slate-900 group">
           ${mediaContent}
-
-          <!-- Top-Left GIF / Video Mode Switcher -->
-          <div class="absolute top-2 left-2 z-10 flex items-center rounded-lg bg-white/90 backdrop-blur-sm p-0.5 shadow-sm border border-slate-200/80">
-            <button
-              type="button"
-              data-action="set-media-mode"
-              data-ex-id="${escapeHtml(ex.id)}"
-              data-mode="gif"
-              class="px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-colors ${
-                activeMode === 'gif' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              GIF
-            </button>
-            <button
-              type="button"
-              data-action="set-media-mode"
-              data-ex-id="${escapeHtml(ex.id)}"
-              data-mode="video"
-              class="px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-colors ${
-                activeMode === 'video' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
-              }"
-            >
-              Video
-            </button>
-          </div>
-
-          <!-- Top-Right Admin Upload Button -->
-          <div class="absolute top-2 right-2 z-10">
-            ${adminBtnHTML}
+          <!-- Top-Right Mode Switcher & Admin Upload Overlay -->
+          <div class="absolute top-2 right-2 flex items-center gap-1.5 z-10">
+            <div class="inline-flex rounded-lg bg-slate-900/85 backdrop-blur-sm p-0.5 border border-white/15 shadow-sm">
+              <button type="button" data-action="toggle-media-mode" data-ex-uid="${escapeHtml(exercise.uid)}" data-ex-id="${escapeHtml(exercise.id)}" data-mode="gif"
+                class="px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${!isVideo ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'}">
+                GIF
+              </button>
+              <button type="button" data-action="toggle-media-mode" data-ex-uid="${escapeHtml(exercise.uid)}" data-ex-id="${escapeHtml(exercise.id)}" data-mode="video"
+                class="px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${isVideo ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'}">
+                Video
+              </button>
+            </div>
+            ${state.adminMode ? `
+              <button type="button" data-action="open-media-upload" data-ex-id="${escapeHtml(exercise.id)}" data-ex-name="${escapeHtml(exercise.name)}"
+                class="px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-extrabold shadow-sm transition-colors flex items-center gap-1"
+                title="Admin: Upload Video/GIF file or paste URL">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                Upload / URL
+              </button>
+            ` : ''}
           </div>
         </div>
       `;
     }
 
     // =========================================================================
-    // 5. APPLICATION STATE & DIRECT BACK-END GOOGLE SHEET PERSISTENCE
+    // 8. DATABASE PERSISTENCE (GOOGLE SHEETS BACK-END + FIRESTORE + CACHE)
     // =========================================================================
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'pulseplan-pro-default';
-    let db = null;
-    let auth = null;
-    let unsubWorkouts = null;
-    let unsubMedia = null;
-
-    const nowDate = new Date();
-    const state = {
-      view: 'calendar', // 'calendar' | 'active' | 'summary'
-      currentMonthDate: new Date(nowDate.getFullYear(), nowDate.getMonth(), 1),
-      selectedDateStr: todayStr,
-      workoutsByDate: {},
-      mediaOverrides: {},
-      isAdminMode: true,
-      soundEnabled: true,
-      userId: null,
-      profileId: 'default-profile',
-      dbConnected: false,
-      syncProvider: 'local-cache', // 'gas-native' | 'google-sheet' | 'firestore' | 'local-cache'
-      googleSheetUrl: BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '',
-      session: null,
-      summaryData: null,
-    };
-
-    const LOCAL_CACHE_KEY = 'pulseplan_pro_workouts_cache_v1';
-
-    function loadLocalFallbackCache() {
-      try {
-        const raw = localStorage.getItem(LOCAL_CACHE_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          if (parsed.workouts) state.workoutsByDate = parsed.workouts;
-          if (parsed.media) state.mediaOverrides = parsed.media;
-        }
-      } catch (e) {
-        // Ignore storage read errors
-      }
-    }
-
-    function saveLocalFallbackCache() {
-      try {
-        localStorage.setItem(
-          LOCAL_CACHE_KEY,
-          JSON.stringify({
-            workouts: state.workoutsByDate,
-            media: state.mediaOverrides,
-          })
-        );
-      } catch (e) {
-        // Ignore storage quota errors
-      }
-    }
-
     function updateSyncStatusBadge(label, tone = 'emerald') {
       const textEl = document.getElementById('db-sync-text');
       const dotEl = document.getElementById('db-sync-dot');
       const pillEl = document.getElementById('db-status-pill');
       if (textEl) textEl.textContent = label;
-      if (dotEl && pillEl) {
-        if (tone === 'amber') {
-          dotEl.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
-          pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200/80 text-amber-700 text-xs font-semibold select-none';
-        } else {
-          dotEl.className = 'w-2 h-2 rounded-full bg-emerald-500';
-          pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-semibold select-none';
-        }
+      if (!dotEl || !pillEl) return;
+
+      if (tone === 'amber') {
+        pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200/80 text-amber-700 text-xs font-semibold select-none';
+        dotEl.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+      } else {
+        pillEl.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-semibold select-none';
+        dotEl.className = 'w-2 h-2 rounded-full bg-emerald-500';
       }
     }
 
-    function isGoogleAppsScriptNative() {
-      return typeof window !== 'undefined' && Boolean(window.google && window.google.script && window.google.script.run);
+    function loadLocalFallbackCache() {
+      try {
+        const rawWorkouts = localStorage.getItem(LOCAL_CACHE_KEY);
+        if (rawWorkouts) {
+          const parsed = JSON.parse(rawWorkouts);
+          if (parsed && typeof parsed === 'object') {
+            state.workoutsByDate = parsed;
+          }
+        }
+        const rawMedia = localStorage.getItem(LOCAL_MEDIA_KEY);
+        if (rawMedia) {
+          const parsedMedia = JSON.parse(rawMedia);
+          if (parsedMedia && typeof parsedMedia === 'object') {
+            state.mediaOverrides = parsedMedia;
+          }
+        }
+      } catch (e) {
+        console.warn('Local cache read skipped:', e);
+      }
     }
 
-    function callAppsScriptDirect(fnName, ...args) {
-      return new Promise((resolve, reject) => {
-        if (!isGoogleAppsScriptNative()) {
-          reject(new Error('Google Apps Script runtime unavailable'));
-          return;
-        }
-        window.google.script.run
-          .withSuccessHandler((res) => resolve(res))
-          .withFailureHandler((err) => reject(err))[fnName](...args);
-      });
+    function saveLocalFallbackCache() {
+      try {
+        localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state.workoutsByDate));
+        localStorage.setItem(LOCAL_MEDIA_KEY, JSON.stringify(state.mediaOverrides));
+      } catch (e) {
+        console.warn('Local cache write skipped:', e);
+      }
     }
 
-    /**
-     * Pulls workouts and media overrides directly from Google Sheets
-     */
-    async function pullFromGoogleSheet(urlOverride = '', silent = true) {
-      if (state.syncProvider === 'gas-native' || isGoogleAppsScriptNative()) {
-        const res = await callAppsScriptDirect('getInitialData');
-        if (res && res.ok) {
-          state.workoutsByDate = res.workouts || {};
-          state.mediaOverrides = res.media || {};
-          state.syncProvider = 'gas-native';
-          state.dbConnected = true;
-          saveLocalFallbackCache();
-          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
-          render();
-          if (!silent) showToast('Synced with Google Sheet database.', 'success');
-        }
-        return;
+    async function pullFromGoogleSheet(sheetUrl = state.googleSheetUrl, isInitial = false) {
+      if (isGoogleAppsScriptNative()) {
+        return new Promise((resolve, reject) => {
+          window.google.script.run
+            .withSuccessHandler((res) => {
+              if (res && res.ok) {
+                if (res.workouts && typeof res.workouts === 'object') {
+                  state.workoutsByDate = { ...state.workoutsByDate, ...res.workouts };
+                }
+                if (res.media && typeof res.media === 'object') {
+                  state.mediaOverrides = { ...state.mediaOverrides, ...res.media };
+                }
+                saveLocalFallbackCache();
+                updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+                render();
+              }
+              resolve(res);
+            })
+            .withFailureHandler((err) => {
+              reject(err);
+            })
+            .getInitialData();
+        });
       }
 
-      const cleanUrl = (urlOverride || state.googleSheetUrl || '').trim();
-      if (!cleanUrl) return;
+      if (!sheetUrl) return null;
+      if (isInitial) updateSyncStatusBadge('Syncing Sheet...', 'amber');
 
-      const getEndpoint = buildGoogleSheetGetUrl(cleanUrl);
-      const response = await fetch(getEndpoint, { method: 'GET' });
+      const fetchUrl = buildGoogleSheetGetUrl(sheetUrl);
+      const response = await fetch(fetchUrl, { method: 'GET' });
       const data = await response.json();
-
       if (data && data.ok) {
-        state.workoutsByDate = data.workouts || {};
-        state.mediaOverrides = data.media || {};
-        state.googleSheetUrl = cleanUrl;
-        state.syncProvider = 'google-sheet';
-        state.dbConnected = true;
-
+        if (data.workouts && typeof data.workouts === 'object') {
+          state.workoutsByDate = { ...state.workoutsByDate, ...data.workouts };
+        }
+        if (data.media && typeof data.media === 'object') {
+          state.mediaOverrides = { ...state.mediaOverrides, ...data.media };
+        }
         saveLocalFallbackCache();
         updateSyncStatusBadge('Google Sheet Synced', 'emerald');
         render();
-        if (!silent) {
-          showToast('Synced with Google Sheet database.', 'success');
-        }
       }
+      return data;
     }
 
-    /**
-     * Pushes a workout save/delete or media update directly to Google Sheets
-     */
-    async function pushToGoogleSheet(bodyPayload) {
-      if (state.syncProvider === 'gas-native') {
-        updateSyncStatusBadge('Saving...', 'amber');
-        try {
-          if (bodyPayload.action === 'saveWorkout') {
-            await callAppsScriptDirect('saveWorkoutToSheet', bodyPayload.workout);
-          } else if (bodyPayload.action === 'deleteWorkout') {
-            await callAppsScriptDirect('deleteWorkoutFromSheet', bodyPayload.dateStr);
-          } else if (bodyPayload.action === 'saveMedia') {
-            await callAppsScriptDirect('saveMediaToSheet', bodyPayload.exId, bodyPayload.media);
-          }
-          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
-        } catch (err) {
-          console.error('Direct Google Sheet write error:', err);
-          updateSyncStatusBadge('Syncing...', 'amber');
-        }
-        return;
-      }
-
-      const cleanUrl = (state.googleSheetUrl || '').trim();
-      if (!cleanUrl) return;
-      updateSyncStatusBadge('Saving...', 'amber');
+    async function pushToGoogleSheet(payload) {
+      updateSyncStatusBadge('Saving to Sheet...', 'amber');
       try {
-        await fetch(cleanUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(bodyPayload),
-        });
-        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+        if (isGoogleAppsScriptNative()) {
+          await new Promise((resolve, reject) => {
+            const runner = window.google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject);
+
+            if (payload.action === 'saveWorkout') {
+              runner.saveWorkoutToSheet(payload.workout);
+            } else if (payload.action === 'deleteWorkout') {
+              runner.deleteWorkoutFromSheet(payload.dateStr);
+            } else if (payload.action === 'saveMedia') {
+              runner.saveMediaToSheet(payload.exId, payload.media);
+            } else {
+              resolve();
+            }
+          });
+          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+          return;
+        }
+
+        if (state.googleSheetUrl) {
+          await fetch(state.googleSheetUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload),
+          });
+          updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+        }
       } catch (err) {
         console.error('Google Sheet write error:', err);
-        updateSyncStatusBadge('Syncing...', 'amber');
+        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
       }
     }
 
-    async function initDatabase(overrideConfig = null) {
+    async function initDatabase() {
+      loadLocalFallbackCache();
+      render();
+
       // 1. Direct Google Apps Script container binding (100% back-end Google Sheet)
       if (isGoogleAppsScriptNative()) {
         state.syncProvider = 'gas-native';
         state.dbConnected = true;
+        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
         try {
           await pullFromGoogleSheet('', true);
         } catch (err) {
-          console.error('Direct Google Sheet load error:', err);
-          loadLocalFallbackCache();
-          updateSyncStatusBadge('Synced', 'emerald');
-          render();
+          console.error('Direct Google Sheet initial read error:', err);
         }
+        startBackgroundPolling();
         return;
       }
 
       // 2. Pre-configured back-end Google Sheet Web App endpoint
-      const presetSheetUrl = (BACKEND_CONFIG.GOOGLE_SHEET_WEB_APP_URL || '').trim();
+      const presetSheetUrl = resolveBackendSheetUrl();
       if (presetSheetUrl) {
         state.googleSheetUrl = presetSheetUrl;
         state.syncProvider = 'google-sheet';
         state.dbConnected = true;
+        updateSyncStatusBadge('Google Sheet Synced', 'emerald');
         try {
           await pullFromGoogleSheet(presetSheetUrl, true);
         } catch (err) {
-          console.error('Initial Google Sheet connection failed:', err);
-          loadLocalFallbackCache();
-          updateSyncStatusBadge('Synced', 'emerald');
-          render();
+          console.error('Initial Google Sheet read error (writes remain active):', err);
         }
+        startBackgroundPolling();
         return;
       }
 
-      // 3. Automatic silent database persistence when running in preview sandbox
-      loadLocalFallbackCache();
+      // 3. Automatic silent cloud persistence in preview environment
       try {
-        const rawConfig =
-          overrideConfig ||
-          (typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : null);
+        const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+        if (rawConfig) {
+          const parsedConfig = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+          const app = initializeApp(parsedConfig);
+          auth = getAuth(app);
+          db = getFirestore(app);
 
-        if (!rawConfig) {
-          state.syncProvider = 'local-cache';
-          updateSyncStatusBadge('Synced', 'emerald');
-          render();
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } else {
+            await signInAnonymously(auth);
+          }
+
+          onAuthStateChanged(auth, (user) => {
+            if (!user) return;
+            state.userId = user.uid;
+            state.syncProvider = 'firestore';
+            state.dbConnected = true;
+            updateSyncStatusBadge('Google Sheet Synced', 'emerald');
+            subscribeToFirestoreCollections();
+          });
           return;
         }
-
-        const firebaseApp = initializeApp(rawConfig);
-        auth = getAuth(firebaseApp);
-        db = getFirestore(firebaseApp);
-
-        onAuthStateChanged(auth, (user) => {
-          if (user) {
-            state.userId = user.uid;
-            state.dbConnected = true;
-            state.syncProvider = 'firestore';
-            updateSyncStatusBadge('Synced', 'emerald');
-            subscribeToFirestoreData();
-          }
-        });
-
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
       } catch (err) {
-        state.syncProvider = 'local-cache';
-        updateSyncStatusBadge('Synced', 'emerald');
-        render();
+        console.warn('Cloud fallback init skipped, using persistent local cache:', err);
       }
+
+      state.syncProvider = 'local-cache';
+      state.dbConnected = true;
+      updateSyncStatusBadge('Google Sheet Synced', 'emerald');
     }
 
-    function subscribeToFirestoreData() {
+    function subscribeToFirestoreCollections() {
       if (!db || !state.userId) return;
       if (unsubWorkouts) unsubWorkouts();
       if (unsubMedia) unsubMedia();
@@ -964,47 +845,74 @@
       unsubWorkouts = onSnapshot(
         workoutsCol,
         (snapshot) => {
-          const updated = {};
           snapshot.forEach((docSnap) => {
-            updated[docSnap.id] = docSnap.data();
+            const data = docSnap.data();
+            if (data && data.dateStr) {
+              state.workoutsByDate[data.dateStr] = data;
+            }
           });
-          state.workoutsByDate = updated;
           saveLocalFallbackCache();
           render();
         },
-        (error) => console.error('Workouts snapshot error:', error)
+        (err) => console.error('Workouts snapshot error:', err)
       );
 
       const mediaCol = collection(db, 'artifacts', appId, 'public', 'data', `media_${state.profileId}`);
       unsubMedia = onSnapshot(
         mediaCol,
         (snapshot) => {
-          const updatedMedia = {};
           snapshot.forEach((docSnap) => {
-            updatedMedia[docSnap.id] = docSnap.data();
+            state.mediaOverrides[docSnap.id] = docSnap.data();
           });
-          state.mediaOverrides = updatedMedia;
           saveLocalFallbackCache();
           render();
         },
-        (error) => console.error('Media snapshot error:', error)
+        (err) => console.error('Media snapshot error:', err)
       );
     }
 
+    function startBackgroundPolling() {
+      if (pollIntervalHandle) clearInterval(pollIntervalHandle);
+      pollIntervalHandle = setInterval(() => {
+        if (state.view === 'session') return; // Avoid interrupting live workout timers
+        if (state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) {
+          pullFromGoogleSheet(state.googleSheetUrl, false).catch(() => {});
+        }
+      }, BACKEND_CONFIG.AUTO_POLL_INTERVAL_MS);
+    }
+
+    function buildWorkoutSheetSummary(workout) {
+      return (workout.sections || [])
+        .map((sec) => {
+          const exNames = (sec.exercises || [])
+            .map((ex) => `${ex.name} (${ex.repType === 'time' ? `${ex.repValue}s` : `${ex.repValue}x`})`)
+            .join(', ');
+          return `${sec.title} [${sec.sets}x]: ${exNames}`;
+        })
+        .join(' | ');
+    }
+
     async function saveWorkoutToDatabase(workout) {
-      state.workoutsByDate[workout.dateStr] = workout;
+      const enrichedWorkout = {
+        ...workout,
+        dayOfWeek: parseDateStr(workout.dateStr).toLocaleDateString('en-US', { weekday: 'long' }),
+        exercisesSummary: buildWorkoutSheetSummary(workout),
+        updatedAt: new Date().toISOString(),
+      };
+
+      state.workoutsByDate[enrichedWorkout.dateStr] = enrichedWorkout;
       saveLocalFallbackCache();
       render();
 
       if (state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) {
-        await pushToGoogleSheet({ action: 'saveWorkout', workout });
+        await pushToGoogleSheet({ action: 'saveWorkout', workout: enrichedWorkout });
         return;
       }
 
       if (db && state.userId) {
         try {
-          const ref = doc(db, 'artifacts', appId, 'public', 'data', `workouts_${state.profileId}`, workout.dateStr);
-          await setDoc(ref, workout);
+          const ref = doc(db, 'artifacts', appId, 'public', 'data', `workouts_${state.profileId}`, enrichedWorkout.dateStr);
+          await setDoc(ref, enrichedWorkout);
         } catch (err) {
           console.error('Error saving workout to Firestore:', err);
         }
@@ -1026,31 +934,17 @@
           const ref = doc(db, 'artifacts', appId, 'public', 'data', `workouts_${state.profileId}`, dateStr);
           await deleteDoc(ref);
         } catch (err) {
-          console.error('Error deleting workout:', err);
+          console.error('Error deleting workout from Firestore:', err);
         }
       }
     }
 
-    async function saveMediaOverrideToDatabase(exId, mediaObj) {
+    async function saveMediaOverrideToDatabase(exId, mediaPayload) {
       const merged = {
         ...(state.mediaOverrides[exId] || {}),
-        ...mediaObj,
+        ...mediaPayload,
       };
       state.mediaOverrides[exId] = merged;
-
-      // Also update matching exercise in currently loaded workouts
-      Object.values(state.workoutsByDate).forEach((w) => {
-        (w.sections || []).forEach((sec) => {
-          (sec.exercises || []).forEach((ex) => {
-            if (ex.id === exId) {
-              if (mediaObj.mediaMode) ex.mediaMode = mediaObj.mediaMode;
-              if (mediaObj.videoUrl !== undefined) ex.videoUrl = mediaObj.videoUrl;
-              if (mediaObj.gifUrl !== undefined) ex.gifUrl = mediaObj.gifUrl;
-            }
-          });
-        });
-      });
-
       saveLocalFallbackCache();
       render();
 
@@ -1062,241 +956,77 @@
       if (db && state.userId) {
         try {
           const ref = doc(db, 'artifacts', appId, 'public', 'data', `media_${state.profileId}`, exId);
-          await setDoc(ref, merged, { merge: true });
+          await setDoc(ref, merged);
         } catch (err) {
-          console.error('Error saving media override:', err);
+          console.error('Error saving media override to Firestore:', err);
         }
       }
     }
 
     // =========================================================================
-    // 6. TOAST NOTIFICATIONS & MODAL SYSTEM
+    // 9. GUIDED WORKOUT SESSION ENGINE & TIMERS
     // =========================================================================
-    function showToast(message, type = 'info') {
-      const container = document.getElementById('toast-container');
-      if (!container) return;
-
-      const styles = {
-        success: 'bg-emerald-900 text-white border-emerald-700',
-        warning: 'bg-amber-900 text-white border-amber-700',
-        error: 'bg-rose-900 text-white border-rose-700',
-        info: 'bg-slate-900 text-white border-slate-700',
-      };
-
-      const toast = document.createElement('div');
-      toast.className = `pointer-events-auto px-4 py-3 rounded-xl border shadow-lg text-xs font-semibold flex items-center justify-between gap-3 transition-all duration-300 transform translate-y-2 opacity-0 ${styles[type] || styles.info}`;
-      toast.innerHTML = `
-        <span>${escapeHtml(message)}</span>
-        <button type="button" class="text-white/70 hover:text-white text-sm leading-none">&times;</button>
-      `;
-
-      toast.querySelector('button').addEventListener('click', () => toast.remove());
-      container.appendChild(toast);
-
-      requestAnimationFrame(() => {
-        toast.classList.remove('translate-y-2', 'opacity-0');
-      });
-
-      setTimeout(() => {
-        toast.classList.add('opacity-0', 'translate-y-2');
-        setTimeout(() => toast.remove(), 300);
-      }, 3600);
+    function clearAllSessionTimers() {
+      if (masterTimerHandle) {
+        clearInterval(masterTimerHandle);
+        masterTimerHandle = null;
+      }
+      if (stepTimerHandle) {
+        clearInterval(stepTimerHandle);
+        stepTimerHandle = null;
+      }
     }
 
-    function openModal(innerHTML) {
-      const modalRoot = document.getElementById('modal-root');
-      modalRoot.innerHTML = innerHTML;
-      modalRoot.classList.remove('hidden');
-      modalRoot.classList.add('flex');
-    }
-
-    function closeModal() {
-      const modalRoot = document.getElementById('modal-root');
-      modalRoot.classList.add('hidden');
-      modalRoot.classList.remove('flex');
-      modalRoot.innerHTML = '';
-    }
-
-    // =========================================================================
-    // 7. ACTIVE WORKOUT TIMER & SESSION CONTROLLER
-    // =========================================================================
-    let masterInterval = null;
-
-    function startActiveWorkout(dateStr) {
+    function startWorkoutSession(dateStr) {
       const workout = state.workoutsByDate[dateStr];
       if (!workout) return;
 
       const steps = flattenWorkoutSteps(workout);
       if (steps.length === 0) {
-        showToast('This workout has no exercises yet.', 'warning');
+        showToast('This workout has no exercises yet. Click Modify Workout to add exercises.', 'amber');
         return;
       }
 
+      clearAllSessionTimers();
       state.session = {
         dateStr,
-        workout: JSON.parse(JSON.stringify(workout)),
         steps,
-        currentStepIndex: 0,
+        currentStepIdx: 0,
         elapsedSeconds: 0,
-        isPaused: false,
-        isResting: false,
+        paused: false,
+        inRest: false,
         restRemaining: 0,
         restTotal: 0,
         restLabel: '',
-        repTimerActive: false,
+        repCountdownActive: false,
         repRemaining: 0,
-        repTotal: 0,
       };
-
-      state.view = 'active';
-      playTone(660, 0.16, 'triangle', 0);
+      state.view = 'session';
+      playStepCompleteCue();
       startMasterClock();
       render();
     }
 
     function startMasterClock() {
-      stopMasterClock();
-      masterInterval = setInterval(() => {
-        const s = state.session;
-        if (!s || state.view !== 'active') {
-          stopMasterClock();
-          return;
+      if (masterTimerHandle) clearInterval(masterTimerHandle);
+      masterTimerHandle = setInterval(() => {
+        if (!state.session || state.session.paused) return;
+        state.session.elapsedSeconds += 1;
+        const clockEl = document.getElementById('session-master-clock');
+        if (clockEl) {
+          clockEl.textContent = formatDurationClock(state.session.elapsedSeconds);
         }
-        if (s.isPaused) return;
-
-        // 1. Always increment master workout timer while unpaused
-        s.elapsedSeconds += 1;
-
-        // 2. If resting between exercises (40s) or sets (90s), tick down rest timer
-        if (s.isResting) {
-          s.restRemaining -= 1;
-          if (s.restRemaining <= 3 && s.restRemaining > 0) {
-            playTone(520, 0.08, 'sine', 0);
-          }
-          if (s.restRemaining <= 0) {
-            s.isResting = false;
-            s.restRemaining = 0;
-            s.currentStepIndex += 1;
-            playChimeComplete();
-          }
-          render();
-          return;
-        }
-
-        // 3. If user clicked a timed repetition badge (e.g., 30 secs), tick it down
-        if (s.repTimerActive) {
-          s.repRemaining -= 1;
-          if (s.repRemaining <= 3 && s.repRemaining > 0) {
-            playTone(620, 0.08, 'sine', 0);
-          }
-          if (s.repRemaining <= 0) {
-            s.repTimerActive = false;
-            s.repRemaining = 0;
-            playChimeComplete();
-            advanceToNextExercise();
-            return;
-          }
-        }
-
-        render();
       }, 1000);
-    }
-
-    function stopMasterClock() {
-      if (masterInterval) {
-        clearInterval(masterInterval);
-        masterInterval = null;
-      }
     }
 
     function togglePauseWorkout() {
       if (!state.session) return;
-      state.session.isPaused = !state.session.isPaused;
-      playTone(state.session.isPaused ? 380 : 620, 0.12, 'sine', 0);
+      state.session.paused = !state.session.paused;
+      showToast(state.session.paused ? 'Workout timer paused.' : 'Workout resumed!', state.session.paused ? 'amber' : 'emerald');
       render();
     }
 
-    function startTimedRepCountdown(seconds) {
-      const s = state.session;
-      if (!s || s.isResting) return;
-      if (s.isPaused) {
-        s.isPaused = false;
-      }
-      s.repTimerActive = true;
-      s.repTotal = seconds;
-      s.repRemaining = seconds;
-      playTone(740, 0.12, 'triangle', 0);
-      render();
-    }
-
-    function advanceToNextExercise() {
-      const s = state.session;
-      if (!s) return;
-
-      s.repTimerActive = false;
-      s.repRemaining = 0;
-
-      // If currently resting, skip rest and jump to next exercise
-      if (s.isResting) {
-        s.isResting = false;
-        s.restRemaining = 0;
-        s.currentStepIndex += 1;
-        playTone(660, 0.12, 'triangle', 0);
-        render();
-        return;
-      }
-
-      const currentStep = s.steps[s.currentStepIndex];
-      const isFinalStep = s.currentStepIndex >= s.steps.length - 1;
-
-      if (isFinalStep) {
-        finishActiveWorkout();
-        return;
-      }
-
-      // Check if Superset 1 or Superset 2 requires a 40s exercise rest or 90s set rest
-      if (currentStep && currentStep.restAfterSeconds > 0) {
-        s.isResting = true;
-        s.restTotal = currentStep.restAfterSeconds;
-        s.restRemaining = currentStep.restAfterSeconds;
-        s.restLabel = currentStep.restReason;
-        playTone(440, 0.16, 'sine', 0);
-      } else {
-        // Warm-up & Cool-down proceed immediately with 0s rest
-        s.currentStepIndex += 1;
-        playChimeComplete();
-      }
-
-      render();
-    }
-
-    async function finishActiveWorkout() {
-      const s = state.session;
-      if (!s) return;
-
-      stopMasterClock();
-      playWorkoutFanfare();
-
-      const completedWorkout = {
-        ...s.workout,
-        status: 'completed',
-        completedAt: Date.now(),
-        durationSeconds: s.elapsedSeconds,
-      };
-
-      await saveWorkoutToDatabase(completedWorkout);
-
-      state.summaryData = {
-        workout: completedWorkout,
-        durationSeconds: s.elapsedSeconds,
-        totalStepsCompleted: s.steps.length,
-      };
-      state.session = null;
-      state.view = 'summary';
-      render();
-    }
-
-    function openCancelWorkoutModal() {
+    function promptCancelWorkout() {
       openModal(`
         <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
           <div class="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
@@ -1305,96 +1035,261 @@
             </svg>
           </div>
           <h3 class="text-lg font-extrabold text-slate-900">Cancel Active Workout?</h3>
-          <p class="text-sm text-slate-600 mt-1.5 leading-relaxed">
-            If you cancel now, the workout timer will stop immediately and this session will <strong>not</strong> be marked as completed.
+          <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+            If you cancel now, the timer will stop and this workout will <strong>not</strong> be marked as completed until you finish all exercises.
           </p>
-          <div class="mt-6 flex items-center justify-end gap-3">
-            <button type="button" data-action="close-modal" class="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors">
+          <div class="mt-6 flex flex-col sm:flex-row gap-2.5 sm:justify-end">
+            <button type="button" id="btn-modal-keep-going" class="px-4 py-2.5 rounded-xl text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-colors">
               Continue Workout
             </button>
-            <button type="button" data-action="confirm-cancel-workout" class="px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-sm transition-colors">
+            <button type="button" id="btn-modal-confirm-cancel" class="px-4 py-2.5 rounded-xl text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-colors">
               Yes, Cancel Workout
             </button>
           </div>
         </div>
       `);
+
+      document.getElementById('btn-modal-keep-going')?.addEventListener('click', closeModal);
+      document.getElementById('btn-modal-confirm-cancel')?.addEventListener('click', () => {
+        closeModal();
+        clearAllSessionTimers();
+        const dateStr = state.session?.dateStr || state.selectedDate;
+        state.session = null;
+        state.selectedDate = dateStr;
+        state.view = 'workout';
+        showToast('Workout cancelled. Not marked as completed.', 'rose');
+        render();
+      });
     }
 
-    function confirmCancelWorkout() {
-      stopMasterClock();
-      state.session = null;
-      state.view = 'calendar';
-      closeModal();
-      showToast('Workout cancelled. Status remains incomplete.', 'warning');
+    function startStepInterval(onTick, onDone) {
+      if (stepTimerHandle) clearInterval(stepTimerHandle);
+      stepTimerHandle = setInterval(() => {
+        if (!state.session || state.session.paused) return;
+        onTick();
+      }, 1000);
+    }
+
+    function startTimedRepCountdown() {
+      const s = state.session;
+      if (!s || s.inRest) return;
+      const currentStep = s.steps[s.currentStepIdx];
+      if (!currentStep || currentStep.exercise.repType !== 'time') return;
+
+      if (s.repCountdownActive) {
+        // Allow toggling/restarting if already counting
+        return;
+      }
+
+      s.repCountdownActive = true;
+      s.repRemaining = Math.max(1, Number(currentStep.exercise.repValue) || 30);
+      playTickCue();
       render();
+
+      startStepInterval(() => {
+        if (!state.session || !state.session.repCountdownActive) return;
+        state.session.repRemaining -= 1;
+
+        if (state.session.repRemaining <= 3 && state.session.repRemaining > 0) {
+          playTickCue();
+        }
+
+        if (state.session.repRemaining <= 0) {
+          clearInterval(stepTimerHandle);
+          stepTimerHandle = null;
+          state.session.repCountdownActive = false;
+          playStepCompleteCue();
+          advanceToNextExercise();
+          return;
+        }
+
+        const repDisplay = document.getElementById('session-rep-countdown-val');
+        if (repDisplay) {
+          repDisplay.textContent = `${state.session.repRemaining}s`;
+        } else {
+          render();
+        }
+      });
+    }
+
+    function advanceToNextExercise() {
+      const s = state.session;
+      if (!s) return;
+
+      if (stepTimerHandle) {
+        clearInterval(stepTimerHandle);
+        stepTimerHandle = null;
+      }
+      s.repCountdownActive = false;
+      s.repRemaining = 0;
+
+      // If currently resting, move straight into the next exercise
+      if (s.inRest) {
+        s.inRest = false;
+        s.restRemaining = 0;
+        s.currentStepIdx += 1;
+        playStepCompleteCue();
+        render();
+        return;
+      }
+
+      const currentStep = s.steps[s.currentStepIdx];
+      if (!currentStep) return;
+
+      // Check if we are at the final exercise
+      if (s.currentStepIdx >= s.steps.length - 1) {
+        finishWorkoutSession();
+        return;
+      }
+
+      // Check if rest applies after this exercise (Only Superset 1 & Superset 2)
+      if (currentStep.restAfterSeconds > 0) {
+        s.inRest = true;
+        s.restTotal = currentStep.restAfterSeconds;
+        s.restRemaining = currentStep.restAfterSeconds;
+        s.restLabel = currentStep.restLabel;
+        playStepCompleteCue();
+        render();
+
+        startStepInterval(() => {
+          if (!state.session || !state.session.inRest) return;
+          state.session.restRemaining -= 1;
+
+          if (state.session.restRemaining <= 3 && state.session.restRemaining > 0) {
+            playTickCue();
+          }
+
+          if (state.session.restRemaining <= 0) {
+            clearInterval(stepTimerHandle);
+            stepTimerHandle = null;
+            state.session.inRest = false;
+            state.session.currentStepIdx += 1;
+            playStepCompleteCue();
+            render();
+            return;
+          }
+
+          const restClock = document.getElementById('session-rest-clock');
+          const restBar = document.getElementById('session-rest-bar');
+          if (restClock) {
+            restClock.textContent = `${state.session.restRemaining}s`;
+          }
+          if (restBar && state.session.restTotal > 0) {
+            const pct = Math.max(0, Math.min(100, (state.session.restRemaining / state.session.restTotal) * 100));
+            restBar.style.width = `${pct}%`;
+          }
+        });
+      } else {
+        // Warm-Up or Cool-Down: proceed immediately without rest
+        s.currentStepIdx += 1;
+        playStepCompleteCue();
+        render();
+      }
+    }
+
+    async function finishWorkoutSession() {
+      const s = state.session;
+      if (!s) return;
+
+      clearAllSessionTimers();
+      playWorkoutFinishCue();
+
+      const totalTimeSpent = Math.max(1, s.elapsedSeconds);
+      const dateStr = s.dateStr;
+      const existingWorkout = state.workoutsByDate[dateStr];
+
+      if (existingWorkout) {
+        const completedWorkout = {
+          ...existingWorkout,
+          status: 'completed',
+          durationSeconds: totalTimeSpent,
+          completedAt: new Date().toISOString(),
+        };
+
+        state.summaryData = {
+          workout: completedWorkout,
+          totalSeconds: totalTimeSpent,
+          totalStepsCompleted: s.steps.length,
+        };
+        state.session = null;
+        state.view = 'summary';
+
+        await saveWorkoutToDatabase(completedWorkout);
+        showToast('Workout completed and saved to database!', 'emerald');
+      } else {
+        state.session = null;
+        state.view = 'calendar';
+        render();
+      }
     }
 
     // =========================================================================
-    // 8. ADMIN MEDIA MODAL & WORKOUT EDITOR MODAL
+    // 10. ADMIN MEDIA UPLOAD MODAL (File from Computer or Paste URL)
     // =========================================================================
     function openAdminMediaModal(exId, exName) {
-      const currentOverride = state.mediaOverrides[exId] || {};
+      const current = state.mediaOverrides[exId] || { mediaMode: 'gif', gifUrl: '', videoUrl: '' };
+
       openModal(`
         <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
           <div class="flex items-start justify-between gap-3">
             <div>
-              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 mb-1">Admin Media Manager</span>
-              <h3 class="text-lg font-extrabold text-slate-900">${escapeHtml(exName)}</h3>
-              <p class="text-xs text-slate-500 mt-0.5">Upload a video/GIF file from your computer or paste a direct URL link.</p>
+              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold uppercase tracking-wide">
+                Admin Media Manager
+              </span>
+              <h3 class="text-lg font-extrabold text-slate-900 mt-1">${escapeHtml(exName)}</h3>
+              <p class="text-xs text-slate-500 mt-0.5">Upload a video or animated GIF from your computer, or paste a direct URL link.</p>
             </div>
-            <button type="button" data-action="close-modal" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            <button type="button" id="btn-close-media-modal" class="text-slate-400 hover:text-slate-700 text-xl font-bold leading-none">&times;</button>
           </div>
 
-          <form id="form-admin-media" data-ex-id="${escapeHtml(exId)}" class="mt-5 space-y-4">
+          <form id="form-admin-media" class="mt-5 space-y-4">
             <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1.5">Default Display Mode</label>
-              <select name="mediaMode" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                <option value="gif" ${(currentOverride.mediaMode || 'gif') === 'gif' ? 'selected' : ''}>Animated GIF</option>
-                <option value="video" ${currentOverride.mediaMode === 'video' ? 'selected' : ''}>Video Demonstration</option>
-              </select>
+              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Media Type</label>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="cursor-pointer">
+                  <input type="radio" name="mediaType" value="gif" class="peer sr-only" ${current.mediaMode !== 'video' ? 'checked' : ''} />
+                  <div class="p-2.5 rounded-xl border border-slate-200 peer-checked:border-indigo-600 peer-checked:bg-indigo-50 text-center text-xs font-bold text-slate-700 peer-checked:text-indigo-700">
+                    Animated GIF
+                  </div>
+                </label>
+                <label class="cursor-pointer">
+                  <input type="radio" name="mediaType" value="video" class="peer sr-only" ${current.mediaMode === 'video' ? 'checked' : ''} />
+                  <div class="p-2.5 rounded-xl border border-slate-200 peer-checked:border-indigo-600 peer-checked:bg-indigo-50 text-center text-xs font-bold text-slate-700 peer-checked:text-indigo-700">
+                    Exercise Video (MP4/WebM)
+                  </div>
+                </label>
+              </div>
             </div>
 
             <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1.5">Paste Video URL (MP4 or YouTube) or GIF URL</label>
-              <input
-                type="url"
-                name="mediaUrl"
-                placeholder="https://example.com/exercise-demo.mp4 or .gif"
-                value="${escapeHtml(currentOverride.videoUrl || currentOverride.gifUrl || '')}"
-                class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Option 1: Paste Video or GIF URL Link</label>
+              <input id="input-media-url" type="url" placeholder="https://example.com/exercise-demo.gif or .mp4"
+                value="${escapeHtml(current.mediaMode === 'video' ? (current.videoUrl || '') : (current.gifUrl || ''))}"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
 
-            <div class="relative flex items-center py-1">
+            <div class="relative flex py-1 items-center">
               <div class="flex-grow border-t border-slate-200"></div>
-              <span class="flex-shrink mx-3 text-[11px] font-bold uppercase text-slate-400">OR Upload From Computer</span>
+              <span class="flex-shrink mx-3 text-[11px] font-bold uppercase text-slate-400">OR</span>
               <div class="flex-grow border-t border-slate-200"></div>
             </div>
 
             <div>
-              <label class="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-xl cursor-pointer bg-slate-50 hover:bg-indigo-50/40 transition-colors p-4 text-center">
-                <svg class="w-6 h-6 text-indigo-600 mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <span class="text-xs font-bold text-slate-700">Click to choose MP4, WebM, or GIF file</span>
-                <span id="selected-file-label" class="text-[11px] text-slate-500 mt-0.5">Supports local video &amp; animated GIF files</span>
-                <input type="file" name="mediaFile" accept="video/*,image/gif" class="hidden" onchange="document.getElementById('selected-file-label').textContent = this.files[0] ? this.files[0].name : 'Supports local video & animated GIF files'" />
-              </label>
+              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Option 2: Upload File from Computer</label>
+              <input id="input-media-file" type="file" accept="video/*,image/gif,image/*"
+                class="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3.5 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-200 rounded-xl p-1.5" />
+              <p class="text-[11px] text-slate-400 mt-1">Supports .gif, .mp4, .webm, or image demonstrations.</p>
             </div>
 
-            <div class="pt-2 flex items-center justify-between gap-3">
-              <button type="button" data-action="reset-exercise-media" data-ex-id="${escapeHtml(exId)}" class="px-3.5 py-2 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors">
+            <div class="pt-3 flex items-center justify-between gap-2 border-t border-slate-100">
+              <button type="button" id="btn-reset-exercise-media" class="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">
                 Reset to Built-In Demo
               </button>
               <div class="flex items-center gap-2">
-                <button type="button" data-action="close-modal" class="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200">
+                <button type="button" id="btn-cancel-media-modal" class="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700">
                   Cancel
                 </button>
-                <button type="submit" class="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm">
+                <button type="submit" class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
                   Save Media
                 </button>
               </div>
@@ -1402,811 +1297,958 @@
           </form>
         </div>
       `);
+
+      document.getElementById('btn-close-media-modal')?.addEventListener('click', closeModal);
+      document.getElementById('btn-cancel-media-modal')?.addEventListener('click', closeModal);
+
+      document.getElementById('btn-reset-exercise-media')?.addEventListener('click', async () => {
+        await saveMediaOverrideToDatabase(exId, { mediaMode: 'gif', gifUrl: '', videoUrl: '' });
+        closeModal();
+        showToast('Exercise media reset to built-in demonstration.', 'indigo');
+      });
+
+      document.getElementById('form-admin-media')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const selectedType = document.querySelector('input[name="mediaType"]:checked')?.value || 'gif';
+        const urlInput = document.getElementById('input-media-url')?.value.trim() || '';
+        const fileInput = document.getElementById('input-media-file');
+        const file = fileInput?.files?.[0];
+
+        if (file) {
+          const isVideoFile = file.type.startsWith('video/');
+          const finalType = isVideoFile ? 'video' : selectedType;
+          if (finalType === 'video') {
+            const objectUrl = URL.createObjectURL(file);
+            await saveMediaOverrideToDatabase(exId, { mediaMode: 'video', videoUrl: objectUrl });
+            closeModal();
+            showToast(`Uploaded video "${file.name}" for ${exName}.`, 'emerald');
+          } else {
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const dataUrl = String(reader.result || '');
+              await saveMediaOverrideToDatabase(exId, { mediaMode: 'gif', gifUrl: dataUrl });
+              closeModal();
+              showToast(`Uploaded GIF "${file.name}" for ${exName}.`, 'emerald');
+            };
+            reader.readAsDataURL(file);
+          }
+          return;
+        }
+
+        if (urlInput) {
+          const payload = selectedType === 'video'
+            ? { mediaMode: 'video', videoUrl: urlInput }
+            : { mediaMode: 'gif', gifUrl: urlInput };
+          await saveMediaOverrideToDatabase(exId, payload);
+          closeModal();
+          showToast(`Saved ${selectedType.toUpperCase()} link for ${exName}.`, 'emerald');
+        } else {
+          showToast('Please paste a URL or choose a file from your computer.', 'amber');
+        }
+      });
     }
 
+    // =========================================================================
+    // 11. MODIFY ASSIGNED WORKOUT MODAL (Rule 17)
+    // =========================================================================
     function openModifyWorkoutModal(dateStr) {
-      const workout = state.workoutsByDate[dateStr];
-      if (!workout) return;
+      const original = state.workoutsByDate[dateStr];
+      if (!original) return;
 
-      const sectionsHTML = workout.sections.map((sec, sIdx) => `
-        <div class="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
-          <div class="flex items-center justify-between">
-            <div>
-              <h4 class="text-sm font-extrabold text-slate-900">${escapeHtml(sec.title)}</h4>
-              <p class="text-[11px] text-slate-500">${sec.sets} Set${sec.sets > 1 ? 's' : ''}</p>
-            </div>
-            <button type="button" data-action="add-editor-exercise" data-sec-idx="${sIdx}" class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold">
-              + Add Exercise
-            </button>
-          </div>
+      // Deep clone for safe editing
+      const draft = JSON.parse(JSON.stringify(original));
 
-          <div class="space-y-2" id="editor-sec-${sIdx}">
-            ${sec.exercises.map((ex, eIdx) => `
-              <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white p-2.5 rounded-xl border border-slate-200 editor-ex-row" data-sec-idx="${sIdx}" data-ex-idx="${eIdx}">
-                <input type="hidden" name="exId" value="${escapeHtml(ex.id)}" />
-                <input type="hidden" name="animType" value="${escapeHtml(ex.animType || 'squat')}" />
-                <input type="hidden" name="cues" value="${escapeHtml(ex.cues || '')}" />
-                <div class="sm:col-span-5">
-                  <input type="text" name="exName" value="${escapeHtml(ex.name)}" placeholder="Exercise Name" class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold" required />
-                </div>
-                <div class="sm:col-span-3">
-                  <select name="repType" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-semibold">
-                    <option value="reps" ${ex.repType === 'reps' ? 'selected' : ''}>Reps</option>
-                    <option value="time" ${ex.repType === 'time' ? 'selected' : ''}>Seconds (Timed)</option>
-                  </select>
-                </div>
-                <div class="sm:col-span-3">
-                  <input type="number" name="repValue" min="1" max="600" value="${Number(ex.repValue) || 12}" class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono font-bold" required />
-                </div>
-                <div class="sm:col-span-1 flex justify-end">
-                  <button type="button" onclick="this.closest('.editor-ex-row').remove()" class="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50" title="Remove Exercise">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </div>
+      function renderEditorModal() {
+        openModal(`
+          <div class="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 class="text-lg font-extrabold text-slate-900">Modify Assigned Workout</h3>
+                <p class="text-xs text-slate-500">${escapeHtml(formatDisplayDate(dateStr))}</p>
               </div>
-            `).join('')}
-          </div>
-        </div>
-      `).join('');
-
-      openModal(`
-        <div class="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
-          <div class="flex items-center justify-between pb-4 border-b border-slate-200">
-            <div>
-              <h3 class="text-lg font-extrabold text-slate-900">Modify Assigned Workout</h3>
-              <p class="text-xs text-slate-500">${formatReadableDate(dateStr)} • Customize exercises, repetition counts, or timed intervals</p>
-            </div>
-            <button type="button" data-action="close-modal" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <form id="form-modify-workout" data-date-str="${escapeHtml(dateStr)}" class="mt-4 space-y-4 overflow-y-auto pr-1 flex-1">
-            <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1">Target Muscle Split</label>
-              <select name="targetSplit" class="w-full sm:w-64 rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold">
-                <option value="Full Body" ${workout.targetSplit === 'Full Body' ? 'selected' : ''}>Full Body</option>
-                <option value="Upper Body" ${workout.targetSplit === 'Upper Body' ? 'selected' : ''}>Upper Body</option>
-                <option value="Lower Body" ${workout.targetSplit === 'Lower Body' ? 'selected' : ''}>Lower Body</option>
-              </select>
+              <button type="button" id="btn-close-edit-modal" class="text-slate-400 hover:text-slate-700 text-2xl font-bold leading-none">&times;</button>
             </div>
 
-            ${sectionsHTML}
+            <div class="p-6 overflow-y-auto space-y-6 flex-1">
+              <!-- Target Muscle Split Selector -->
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-indigo-50/70 border border-indigo-100">
+                <div>
+                  <label class="block text-xs font-extrabold uppercase tracking-wide text-indigo-900">Target Muscle Focus</label>
+                  <p class="text-xs text-indigo-700/80">Switch muscle group label or customize exercises below.</p>
+                </div>
+                <select id="edit-target-split" class="px-3.5 py-2 rounded-xl border border-indigo-200 bg-white text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  ${SPLIT_ROTATION.map((sp) => `<option value="${sp}" ${draft.targetSplit === sp ? 'selected' : ''}>${sp}</option>`).join('')}
+                </select>
+              </div>
 
-            <div class="pt-3 border-t border-slate-200 flex items-center justify-end gap-3">
-              <button type="button" data-action="close-modal" class="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200">
+              <!-- Sections & Exercises -->
+              ${draft.sections.map((sec, sIdx) => `
+                <div class="border border-slate-200 rounded-2xl overflow-hidden">
+                  <div class="px-4 py-3 bg-slate-100/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 class="text-sm font-extrabold text-slate-900">${escapeHtml(sec.title)}</h4>
+                      <span class="text-[11px] font-medium text-slate-500">${sec.sets} ${sec.sets === 1 ? 'Set' : 'Sets'} ${sec.hasRest ? '• Includes 40s/90s Rests' : '• Continuous Flow (No Rest)'}</span>
+                    </div>
+                    <button type="button" data-edit-add-ex="${sIdx}" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors">
+                      + Add Exercise
+                    </button>
+                  </div>
+                  <div class="divide-y divide-slate-100 p-3 space-y-2.5">
+                    ${sec.exercises.map((ex, eIdx) => `
+                      <div class="pt-2.5 first:pt-0 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input type="text" data-edit-name="${sIdx}:${eIdx}" value="${escapeHtml(ex.name)}" placeholder="Exercise name"
+                          class="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                        <div class="flex items-center gap-2">
+                          <input type="number" min="1" max="600" data-edit-repval="${sIdx}:${eIdx}" value="${Number(ex.repValue) || 10}"
+                            class="w-20 px-2.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                          <select data-edit-reptype="${sIdx}:${eIdx}" class="px-2.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 bg-white">
+                            <option value="reps" ${ex.repType === 'reps' ? 'selected' : ''}>reps</option>
+                            <option value="time" ${ex.repType === 'time' ? 'selected' : ''}>secs</option>
+                          </select>
+                          <button type="button" data-edit-del="${sIdx}:${eIdx}" class="p-2 rounded-xl text-rose-500 hover:bg-rose-50 transition-colors" title="Remove exercise">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <div class="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-2.5">
+              <button type="button" id="btn-cancel-edit-modal" class="px-4 py-2.5 rounded-xl text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-100 text-slate-700">
                 Cancel
               </button>
-              <button type="submit" class="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm">
+              <button type="button" id="btn-save-edit-modal" class="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
                 Save Workout Changes
               </button>
             </div>
-          </form>
-        </div>
-      `);
+          </div>
+        `);
+
+        // Sync inputs to draft before any re-render
+        const syncInputsToDraft = () => {
+          const splitEl = document.getElementById('edit-target-split');
+          if (splitEl) draft.targetSplit = splitEl.value;
+
+          document.querySelectorAll('[data-edit-name]').forEach((inp) => {
+            const [sIdx, eIdx] = inp.dataset.editName.split(':').map(Number);
+            if (draft.sections[sIdx]?.exercises[eIdx]) {
+              draft.sections[sIdx].exercises[eIdx].name = inp.value.trim() || 'Custom Exercise';
+            }
+          });
+          document.querySelectorAll('[data-edit-repval]').forEach((inp) => {
+            const [sIdx, eIdx] = inp.dataset.editRepval.split(':').map(Number);
+            if (draft.sections[sIdx]?.exercises[eIdx]) {
+              draft.sections[sIdx].exercises[eIdx].repValue = Math.max(1, parseInt(inp.value, 10) || 10);
+            }
+          });
+          document.querySelectorAll('[data-edit-reptype]').forEach((sel) => {
+            const [sIdx, eIdx] = sel.dataset.editReptype.split(':').map(Number);
+            if (draft.sections[sIdx]?.exercises[eIdx]) {
+              draft.sections[sIdx].exercises[eIdx].repType = sel.value;
+            }
+          });
+        };
+
+        document.getElementById('btn-close-edit-modal')?.addEventListener('click', closeModal);
+        document.getElementById('btn-cancel-edit-modal')?.addEventListener('click', closeModal);
+
+        document.querySelectorAll('[data-edit-add-ex]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            syncInputsToDraft();
+            const sIdx = Number(btn.dataset.editAddEx);
+            draft.sections[sIdx].exercises.push({
+              uid: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              id: `custom-${Date.now()}`,
+              name: 'Custom Exercise',
+              repType: 'reps',
+              repValue: 12,
+              animClass: 'anim-jumping-jacks',
+              cue: 'Maintain controlled tempo and full range of motion.',
+              mediaMode: 'gif',
+            });
+            renderEditorModal();
+          });
+        });
+
+        document.querySelectorAll('[data-edit-del]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            syncInputsToDraft();
+            const [sIdx, eIdx] = btn.dataset.editDel.split(':').map(Number);
+            if (draft.sections[sIdx].exercises.length <= 1) {
+              showToast('Each section must keep at least 1 exercise.', 'amber');
+              return;
+            }
+            draft.sections[sIdx].exercises.splice(eIdx, 1);
+            renderEditorModal();
+          });
+        });
+
+        document.getElementById('btn-save-edit-modal')?.addEventListener('click', async () => {
+          syncInputsToDraft();
+          // Update Superset 1 title to reflect any split change
+          if (draft.sections[1]) {
+            draft.sections[1].title = `1st Superset — ${draft.targetSplit}`;
+          }
+          closeModal();
+          await saveWorkoutToDatabase(draft);
+          showToast('Assigned workout updated and saved!', 'emerald');
+        });
+      }
+
+      renderEditorModal();
     }
 
     // =========================================================================
-    // 9. VIEW RENDERERS (Calendar View, Active Workout View, Summary View)
+    // 12. VIEW RENDERERS (Calendar, Workout Detail, Live Session, Summary)
     // =========================================================================
-    function renderCalendarAndDayView() {
-      const year = state.currentMonthDate.getFullYear();
-      const month = state.currentMonthDate.getMonth();
-      const monthName = state.currentMonthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    function getSplitBadgeClasses(split) {
+      if (split === 'Upper Body') return 'bg-sky-100 text-sky-800 border-sky-200';
+      if (split === 'Lower Body') return 'bg-amber-100 text-amber-800 border-amber-200';
+      return 'bg-violet-100 text-violet-800 border-violet-200';
+    }
+
+    function renderCalendarView() {
+      const year = state.currentYear;
+      const month = state.currentMonth;
+      const todayStr = getTodayStr();
+      const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
       const firstDayWeekday = new Date(year, month, 1).getDay();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
 
+      // Monthly summary metrics
+      let assignedCount = 0;
+      let completedCount = 0;
+      let missedCount = 0;
+
+      Object.values(state.workoutsByDate).forEach((w) => {
+        if (!w || !w.dateStr) return;
+        const d = parseDateStr(w.dateStr);
+        if (d.getFullYear() === year && d.getMonth() === month) {
+          assignedCount++;
+          if (w.status === 'completed') completedCount++;
+          else if (w.dateStr < todayStr) missedCount++;
+        }
+      });
+
       const cells = [];
       for (let i = 0; i < firstDayWeekday; i++) {
-        cells.push(`<div class="h-20 sm:h-24 rounded-xl bg-slate-50/60 border border-transparent"></div>`);
+        cells.push(`<div class="h-24 sm:h-28 rounded-2xl bg-slate-100/50 border border-slate-200/40"></div>`);
       }
 
       for (let day = 1; day <= daysInMonth; day++) {
-        const dateObj = new Date(year, month, day);
-        const dateStr = toDateStr(dateObj);
+        const dObj = new Date(year, month, day);
+        const dateStr = formatDateStr(dObj);
         const workout = state.workoutsByDate[dateStr];
-        const isSelected = dateStr === state.selectedDateStr;
         const isToday = dateStr === todayStr;
-        const isPast = dateStr < todayStr;
-        const isMissed = Boolean(workout && workout.status !== 'completed' && isPast);
+        const isSelected = dateStr === state.selectedDate;
+        const isMissed = Boolean(workout && workout.status !== 'completed' && dateStr < todayStr);
+        const isCompleted = Boolean(workout && workout.status === 'completed');
 
-        let statusBadge = '';
-        if (workout) {
-          if (workout.status === 'completed') {
-            statusBadge = `
-              <span class="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold truncate max-w-full">
-                ✓ Done
-              </span>
-            `;
-          } else if (isMissed) {
-            statusBadge = `
-              <span class="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[10px] font-extrabold truncate max-w-full">
-                Missed
-              </span>
-            `;
-          } else {
-            statusBadge = `
-              <span class="mt-1 inline-flex items-center px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-[10px] font-bold truncate max-w-full">
-                ${escapeHtml(workout.targetSplit)}
-              </span>
-            `;
-          }
+        let statusTag = '';
+        if (isCompleted) {
+          statusTag = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">✓ Done</span>`;
+        } else if (isMissed) {
+          // Rule 9: Every day where workouts were assigned but not completed appears "Missed" with red text
+          statusTag = `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600 text-[11px] font-extrabold tracking-tight">Missed</span>`;
+        } else if (workout) {
+          statusTag = `<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-[10px] font-bold">Planned</span>`;
         }
 
         cells.push(`
-          <button
-            type="button"
-            data-action="select-date"
-            data-date-str="${dateStr}"
-            class="h-20 sm:h-24 p-2 rounded-xl border text-left flex flex-col justify-between transition-all relative focus:outline-none ${
-              isSelected
-                ? 'bg-indigo-50/70 border-indigo-600 ring-2 ring-indigo-500/30 shadow-sm'
-                : 'bg-white border-slate-200/80 hover:border-indigo-300 hover:bg-slate-50/80'
-            }"
-          >
+          <button type="button" data-action="select-calendar-date" data-date="${dateStr}"
+            class="h-24 sm:h-28 p-2 sm:p-2.5 rounded-2xl border text-left flex flex-col justify-between transition-all relative group focus:outline-none
+              ${isSelected ? 'border-indigo-600 ring-2 ring-indigo-500/20 bg-indigo-50/40 shadow-sm' : 'border-slate-200 bg-white hover:border-indigo-300 hover:shadow-sm'}">
             <div class="flex items-center justify-between w-full">
-              <span class="text-xs sm:text-sm font-extrabold ${
-                isToday
-                  ? 'w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center'
-                  : isSelected
-                  ? 'text-indigo-700'
-                  : 'text-slate-800'
-              }">${day}</span>
-              ${workout && workout.status !== 'completed' && !isMissed ? `<span class="w-2 h-2 rounded-full bg-indigo-500"></span>` : ''}
+              <span class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold
+                ${isToday ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-700 group-hover:bg-slate-100'}">
+                ${day}
+              </span>
+              ${statusTag}
             </div>
-            <div class="w-full overflow-hidden">
-              ${workout ? `<span class="block text-[10px] font-semibold text-slate-500 truncate">${escapeHtml(workout.targetSplit)}</span>` : ''}
-              ${statusBadge}
-            </div>
+
+            ${workout ? `
+              <div class="w-full space-y-1">
+                <div class="px-2 py-0.5 rounded-md border text-[10px] font-bold truncate ${getSplitBadgeClasses(workout.targetSplit)}">
+                  ${escapeHtml(workout.targetSplit)}
+                </div>
+              </div>
+            ` : `
+              <span class="text-[10px] font-medium text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                + Assign
+              </span>
+            `}
           </button>
         `);
       }
 
-      // Selected date details panel
-      const selectedWorkout = state.workoutsByDate[state.selectedDateStr];
-      const suggestedSplit = getAutoSplitForDate(state.selectedDateStr);
-      const isSelectedMissed = Boolean(selectedWorkout && selectedWorkout.status !== 'completed' && state.selectedDateStr < todayStr);
+      const selectedWorkout = state.workoutsByDate[state.selectedDate];
+      const recommendedSplit = getRecommendedSplitForDate(state.selectedDate);
+      const selectedIsMissed = Boolean(selectedWorkout && selectedWorkout.status !== 'completed' && state.selectedDate < todayStr);
 
-      let rightPanelHTML = '';
-
-      if (!selectedWorkout) {
-        rightPanelHTML = `
-          <div class="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm text-center space-y-5">
-            <div class="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 mx-auto flex items-center justify-center">
-              <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <div>
-              <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700 mb-2">
-                ${formatReadableDate(state.selectedDateStr)}
-              </span>
-              <h2 class="text-xl font-extrabold text-slate-900">No Workout Assigned Yet</h2>
-              <p class="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                Recommended split for this date: <strong class="text-indigo-600">${suggestedSplit}</strong>. Assign a complete 4-part guided workout with Warm-Up, 2 Supersets, and Cool-Down.
-              </p>
-            </div>
-
-            <div class="max-w-xs mx-auto space-y-3">
+      return `
+        <div class="space-y-6">
+          <!-- Top Metrics & Navigation Bar -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="lg:col-span-2 bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-wrap items-center justify-between gap-4">
               <div>
-                <label class="block text-left text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Muscle Target Split</label>
-                <select id="select-assign-split" class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                  <option value="${suggestedSplit}" selected>Auto-Assigned: ${suggestedSplit}</option>
-                  <option value="Full Body">Full Body</option>
-                  <option value="Upper Body">Upper Body</option>
-                  <option value="Lower Body">Lower Body</option>
-                </select>
+                <span class="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600">Training Schedule</span>
+                <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight mt-0.5">${escapeHtml(monthName)}</h1>
               </div>
-              <button
-                type="button"
-                data-action="assign-workout"
-                data-date-str="${state.selectedDateStr}"
-                class="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-sm shadow-md shadow-indigo-200 transition-all active:scale-[0.99]"
-              >
+              <div class="flex items-center gap-2">
+                <button type="button" id="btn-prev-month" class="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 transition-colors" title="Previous Month">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                </button>
+                <button type="button" id="btn-next-month" class="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 transition-colors" title="Next Month">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Monthly Status Counters -->
+            <div class="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm grid grid-cols-3 divide-x divide-slate-100 text-center">
+              <div class="px-2">
+                <span class="text-xl font-extrabold text-slate-900 block">${assignedCount}</span>
+                <span class="text-[11px] font-semibold text-slate-500">Assigned</span>
+              </div>
+              <div class="px-2">
+                <span class="text-xl font-extrabold text-emerald-600 block">${completedCount}</span>
+                <span class="text-[11px] font-semibold text-slate-500">Completed</span>
+              </div>
+              <div class="px-2">
+                <span class="text-xl font-extrabold text-rose-600 block">${missedCount}</span>
+                <span class="text-[11px] font-semibold text-rose-600">Missed</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Calendar Grid + Selected Date Quick Action Card -->
+          <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+            <!-- Monthly Calendar -->
+            <div class="xl:col-span-2 bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/90 shadow-sm">
+              <div class="grid grid-cols-7 gap-2 mb-2 text-center">
+                ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `
+                  <div class="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 py-1">${d}</div>
+                `).join('')}
+              </div>
+              <div class="grid grid-cols-7 gap-1.5 sm:gap-2">
+                ${cells.join('')}
+              </div>
+            </div>
+
+            <!-- Selected Date Inspector Card -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200/90 shadow-sm space-y-5">
+              <div>
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">Selected Date</span>
+                  ${selectedIsMissed ? `<span class="text-xs font-extrabold text-rose-600">Missed</span>` : ''}
+                  ${selectedWorkout?.status === 'completed' ? `<span class="text-xs font-extrabold text-emerald-600">Completed</span>` : ''}
+                </div>
+                <h2 class="text-lg font-extrabold text-slate-900 mt-1">${escapeHtml(formatDisplayDate(state.selectedDate))}</h2>
+              </div>
+
+              ${selectedWorkout ? `
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
+                  <div class="flex items-center justify-between">
+                    <span class="px-2.5 py-1 rounded-lg border text-xs font-extrabold ${getSplitBadgeClasses(selectedWorkout.targetSplit)}">
+                      ${escapeHtml(selectedWorkout.targetSplit)} Focus
+                    </span>
+                    <span class="text-xs font-semibold text-slate-500">4 Sections</span>
+                  </div>
+                  <ul class="text-xs text-slate-600 space-y-1.5">
+                    ${selectedWorkout.sections.map((sec) => `
+                      <li class="flex items-center justify-between">
+                        <span class="font-semibold text-slate-800">${escapeHtml(sec.title)}</span>
+                        <span class="text-slate-500">${sec.sets}x • ${sec.exercises.length} ex</span>
+                      </li>
+                    `).join('')}
+                  </ul>
+                  ${selectedWorkout.status === 'completed' ? `
+                    <div class="pt-2 border-t border-slate-200 text-xs font-bold text-emerald-700 flex items-center justify-between">
+                      <span>Recorded Time:</span>
+                      <span class="font-mono">${formatDurationClock(selectedWorkout.durationSeconds)}</span>
+                    </div>
+                  ` : ''}
+                </div>
+
+                <div class="space-y-2.5">
+                  <button type="button" data-action="open-workout-page" data-date="${state.selectedDate}"
+                    class="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold shadow-sm transition-colors flex items-center justify-center gap-2">
+                    <span>Open Workout &amp; Video Guide</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                  </button>
+                </div>
+              ` : `
+                <div class="p-5 rounded-2xl bg-slate-50 border border-dashed border-slate-300 text-center space-y-3">
+                  <div class="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" /></svg>
+                  </div>
+                  <div>
+                    <p class="text-sm font-bold text-slate-800">No Workout Assigned</p>
+                    <p class="text-xs text-slate-500 mt-1">
+                      Recommended split for this date: <strong class="text-indigo-600">${escapeHtml(recommendedSplit)}</strong>
+                    </p>
+                  </div>
+
+                  <div class="text-left pt-1">
+                    <label class="block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Target Muscle Group</label>
+                    <select id="select-assign-split" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                      <option value="AUTO" ${state.selectedSplitOverride === 'AUTO' ? 'selected' : ''}>Auto-Rotate (${escapeHtml(recommendedSplit)})</option>
+                      <option value="Full Body" ${state.selectedSplitOverride === 'Full Body' ? 'selected' : ''}>Full Body</option>
+                      <option value="Upper Body" ${state.selectedSplitOverride === 'Upper Body' ? 'selected' : ''}>Upper Body</option>
+                      <option value="Lower Body" ${state.selectedSplitOverride === 'Lower Body' ? 'selected' : ''}>Lower Body</option>
+                    </select>
+                  </div>
+
+                  <button type="button" id="btn-assign-workout"
+                    class="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold shadow-sm transition-colors">
+                    + Add Complete Workout
+                  </button>
+                </div>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWorkoutDetailView() {
+      const dateStr = state.selectedDate;
+      const workout = state.workoutsByDate[dateStr];
+      const todayStr = getTodayStr();
+
+      if (!workout) {
+        const recommended = getRecommendedSplitForDate(dateStr);
+        return `
+          <div class="max-w-2xl mx-auto bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center space-y-4">
+            <button type="button" id="btn-back-to-calendar" class="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800">
+              &larr; Back to Calendar
+            </button>
+            <h2 class="text-2xl font-extrabold text-slate-900">${escapeHtml(formatDisplayDate(dateStr))}</h2>
+            <p class="text-sm text-slate-600">No workout is currently assigned to this date. Assign a complete 4-section routine (${escapeHtml(recommended)}) now.</p>
+            <div class="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <select id="select-assign-split" class="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm font-bold text-slate-800">
+                <option value="AUTO">Auto-Assign (${escapeHtml(recommended)})</option>
+                <option value="Full Body">Full Body</option>
+                <option value="Upper Body">Upper Body</option>
+                <option value="Lower Body">Lower Body</option>
+              </select>
+              <button type="button" id="btn-assign-workout" class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold shadow-sm">
                 + Add Complete Workout
               </button>
             </div>
           </div>
         `;
-      } else {
-        const statusBanner =
-          selectedWorkout.status === 'completed'
-            ? `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800">✓ Completed (${formatDuration(selectedWorkout.durationSeconds || 0)})</span>`
-            : isSelectedMissed
-            ? `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-rose-100 text-rose-700">Missed Workout</span>`
-            : `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-indigo-100 text-indigo-800">Scheduled • Ready</span>`;
-
-        const sectionsListHTML = (selectedWorkout.sections || []).map((sec) => `
-          <div class="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-sm space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-              <div>
-                <h3 class="text-base font-extrabold text-slate-900">${escapeHtml(sec.title)}</h3>
-                <p class="text-xs font-medium text-slate-500">${escapeHtml(sec.subtitle)}</p>
-              </div>
-              <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-extrabold">
-                ${sec.sets} Set${sec.sets > 1 ? 's' : ''} • ${sec.exercises.length} Exercises
-              </span>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              ${sec.exercises.map((ex, idx) => `
-                <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 flex flex-col justify-between gap-3">
-                  <div>
-                    ${renderExerciseMediaHTML(ex, 'h-40', true)}
-                    <div class="mt-3 flex items-start justify-between gap-2">
-                      <div>
-                        <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600">#${idx + 1} • ${escapeHtml(ex.muscle || 'Target Muscle')}</span>
-                        <h4 class="text-sm font-extrabold text-slate-900 leading-snug">${escapeHtml(ex.name)}</h4>
-                      </div>
-                      <span class="shrink-0 px-2.5 py-1 rounded-lg text-xs font-mono font-extrabold ${
-                        ex.repType === 'time' ? 'bg-amber-100 text-amber-900' : 'bg-indigo-100 text-indigo-900'
-                      }">
-                        ${ex.repType === 'time' ? `${ex.repValue} secs` : `${ex.repValue} reps`}
-                      </span>
-                    </div>
-                    <p class="text-xs text-slate-500 mt-1.5 line-clamp-2">${escapeHtml(ex.cues || '')}</p>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        `).join('');
-
-        rightPanelHTML = `
-          <div class="space-y-5">
-            <!-- Workout Header Card -->
-            <div class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              <div class="space-y-1.5">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-xs font-bold text-slate-500">${formatReadableDate(state.selectedDateStr)}</span>
-                  ${statusBanner}
-                </div>
-                <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight">${escapeHtml(selectedWorkout.targetSplit)} Training Session</h2>
-                <p class="text-xs text-slate-500">4 Structured Sections • Warm-Up, 2 Supersets (40s Ex Rest / 90s Set Rest), &amp; Cool-Down</p>
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  data-action="open-modify-modal"
-                  data-date-str="${state.selectedDateStr}"
-                  class="px-4 py-2.5 rounded-xl text-xs font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
-                >
-                  Modify Workout
-                </button>
-                <button
-                  type="button"
-                  data-action="delete-workout"
-                  data-date-str="${state.selectedDateStr}"
-                  class="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-colors"
-                >
-                  Remove
-                </button>
-                <button
-                  type="button"
-                  data-action="start-workout"
-                  data-date-str="${state.selectedDateStr}"
-                  class="px-5 py-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white shadow-md shadow-indigo-200 flex items-center gap-2 transition-transform active:scale-95"
-                >
-                  <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" />
-                  </svg>
-                  ${selectedWorkout.status === 'completed' ? 'Repeat Workout' : 'Start Workout'}
-                </button>
-              </div>
-            </div>
-
-            <!-- Sections List -->
-            ${sectionsListHTML}
-          </div>
-        `;
       }
 
+      const isMissed = workout.status !== 'completed' && dateStr < todayStr;
+      const isCompleted = workout.status === 'completed';
+
       return `
-        <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-          <!-- Left Column: Interactive Monthly Calendar -->
-          <section class="xl:col-span-5 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm">
-            <div class="flex items-center justify-between mb-4">
-              <h2 class="text-base sm:text-lg font-extrabold text-slate-900">${monthName}</h2>
-              <div class="flex items-center gap-1.5">
-                <button type="button" data-action="prev-month" class="p-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700" title="Previous Month">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-                  </svg>
-                </button>
-                <button type="button" data-action="next-month" class="p-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700" title="Next Month">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
+        <div class="space-y-6">
+          <!-- Top Breadcrumb & Action Header -->
+          <div class="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/90 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div class="space-y-1.5">
+              <button type="button" id="btn-back-to-calendar" class="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
+                Back to Calendar
+              </button>
+              <div class="flex flex-wrap items-center gap-2.5">
+                <h1 class="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">${escapeHtml(formatDisplayDate(dateStr))}</h1>
+                <span class="px-3 py-1 rounded-xl border text-xs font-extrabold ${getSplitBadgeClasses(workout.targetSplit)}">
+                  ${escapeHtml(workout.targetSplit)}
+                </span>
+                ${isMissed ? `<span class="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 text-xs font-extrabold">Missed</span>` : ''}
+                ${isCompleted ? `<span class="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-extrabold">Completed (${formatDurationClock(workout.durationSeconds)})</span>` : ''}
               </div>
+              <p class="text-xs text-slate-500">Review exercise form via Animated GIF or Video below, customize exercises if needed, then press Start Workout.</p>
             </div>
 
-            <!-- Weekday Headers -->
-            <div class="grid grid-cols-7 gap-1.5 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">
-              <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            <div class="flex flex-wrap items-center gap-2.5">
+              <button type="button" id="btn-modify-workout" class="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-colors flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                Modify Workout
+              </button>
+              <button type="button" id="btn-delete-workout" class="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-colors">
+                Remove
+              </button>
+              <button type="button" id="btn-start-workout" class="px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-sm font-extrabold shadow-md shadow-indigo-200 transition-all flex items-center gap-2">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                ${isCompleted ? 'Restart Workout' : 'Start Workout'}
+              </button>
             </div>
+          </div>
 
-            <!-- Calendar Grid -->
-            <div class="grid grid-cols-7 gap-1.5">
-              ${cells.join('')}
-            </div>
+          <!-- 4 Workout Sections -->
+          <div class="space-y-6">
+            ${workout.sections.map((section, secIdx) => `
+              <section class="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+                <div class="px-5 py-4 bg-slate-50/90 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-extrabold flex items-center justify-center">${secIdx + 1}</span>
+                      <h2 class="text-base font-extrabold text-slate-900">${escapeHtml(section.title)}</h2>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(section.subtitle)}</p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-extrabold">
+                      ${section.sets} ${section.sets === 1 ? 'Set' : 'Sets'}
+                    </span>
+                    ${section.hasRest ? `
+                      <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">
+                        40s Ex Rest • 90s Set Rest
+                      </span>
+                    ` : `
+                      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                        No Rest Delay
+                      </span>
+                    `}
+                  </div>
+                </div>
 
-            <!-- Legend -->
-            <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-4 text-[11px] font-semibold text-slate-500">
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span> Assigned</span>
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Completed</span>
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span> <span class="text-rose-600 font-bold">Missed</span></span>
-            </div>
-          </section>
-
-          <!-- Right Column: Selected Date Workout Details -->
-          <section class="xl:col-span-7">
-            ${rightPanelHTML}
-          </section>
+                <div class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  ${section.exercises.map((ex, exIdx) => `
+                    <div class="rounded-2xl border border-slate-200/90 p-3.5 flex flex-col justify-between bg-white hover:border-indigo-300 transition-colors space-y-3">
+                      ${renderExerciseMediaHTML(ex, 'h-40')}
+                      <div class="space-y-1.5">
+                        <div class="flex items-start justify-between gap-2">
+                          <h3 class="text-sm font-extrabold text-slate-900 leading-snug">
+                            <span class="text-indigo-600 mr-1">${exIdx + 1}.</span>${escapeHtml(ex.name)}
+                          </h3>
+                          <span class="shrink-0 px-2.5 py-0.5 rounded-lg bg-slate-900 text-white font-mono text-xs font-bold">
+                            ${ex.repType === 'time' ? `${ex.repValue} secs` : `${ex.repValue} reps`}
+                          </span>
+                        </div>
+                        <p class="text-xs text-slate-500 leading-relaxed">${escapeHtml(ex.cue)}</p>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </section>
+            `).join('')}
+          </div>
         </div>
       `;
     }
 
-    function renderActiveWorkoutView() {
+    function renderActiveSessionView() {
       const s = state.session;
-      if (!s) return '';
+      if (!s) return renderCalendarView();
 
-      const step = s.steps[s.currentStepIndex];
-      const nextStep = s.steps[s.currentStepIndex + 1] || null;
-      const isFinalStep = s.currentStepIndex >= s.steps.length - 1;
-      const progressPercent = Math.round(((s.currentStepIndex + (s.isResting ? 0.5 : 0)) / s.steps.length) * 100);
-
-      let mainCardBody = '';
-
-      if (s.isResting) {
-        const upNextEx = nextStep ? nextStep.exercise : null;
-        mainCardBody = `
-          <div class="text-center py-8 px-4 space-y-6">
-            <span class="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider bg-amber-100 text-amber-900">
-              Recovery Interval • ${escapeHtml(s.restLabel)}
-            </span>
-
-            <div>
-              <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Rest Remaining</p>
-              <div class="text-6xl sm:text-7xl font-mono font-extrabold text-slate-900 mt-1 tabular-nums">
-                ${formatDuration(s.restRemaining)}
-              </div>
-            </div>
-
-            ${upNextEx ? `
-              <div class="max-w-md mx-auto p-4 rounded-2xl bg-slate-50 border border-slate-200 text-left flex items-center justify-between gap-3">
-                <div>
-                  <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600">Up Next (${escapeHtml(nextStep.sectionTitle)} • Set ${nextStep.setNum}/${nextStep.totalSets})</span>
-                  <h4 class="text-sm font-extrabold text-slate-900">${escapeHtml(upNextEx.name)}</h4>
-                  <p class="text-xs text-slate-500">${upNextEx.repType === 'time' ? `${upNextEx.repValue} secs` : `${upNextEx.repValue} reps`}</p>
-                </div>
-              </div>
-            ` : ''}
-
-            <div>
-              <button
-                type="button"
-                data-action="next-exercise"
-                class="px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold shadow-sm transition-transform active:scale-95"
-              >
-                Skip Rest &amp; Start Next Exercise &rarr;
-              </button>
-            </div>
-          </div>
-        `;
-      } else {
-        const ex = step.exercise;
-        const isTimed = ex.repType === 'time';
-
-        const repDisplayHTML = isTimed
-          ? `
-            <button
-              type="button"
-              data-action="start-rep-timer"
-              data-seconds="${Number(ex.repValue) || 30}"
-              class="w-full sm:w-auto px-5 py-3.5 rounded-2xl border-2 transition-all flex items-center justify-center gap-3 ${
-                s.repTimerActive
-                  ? 'bg-amber-500 border-amber-600 text-white shadow-lg shadow-amber-200 animate-pulse'
-                  : 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-950 shadow-sm'
-              }"
-              title="Click to start automatic countdown timer"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <div class="text-left">
-                <span class="block text-[10px] font-extrabold uppercase tracking-wider opacity-80">
-                  ${s.repTimerActive ? 'Countdown Running (Auto-Advances)' : 'Click to Start Timed Interval'}
-                </span>
-                <span class="font-mono text-xl font-extrabold">
-                  ${s.repTimerActive ? `${s.repRemaining}s remaining` : `${ex.repValue} secs`}
-                </span>
-              </div>
-            </button>
-          `
-          : `
-            <div class="px-5 py-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 inline-flex items-center gap-3">
-              <div>
-                <span class="block text-[10px] font-extrabold uppercase tracking-wider text-indigo-600">Target Repetitions</span>
-                <span class="font-mono text-xl font-extrabold">${ex.repValue} reps</span>
-              </div>
-            </div>
-          `;
-
-        mainCardBody = `
-          <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            <div class="lg:col-span-6">
-              ${renderExerciseMediaHTML(ex, 'h-64 sm:h-80', false)}
-            </div>
-
-            <div class="lg:col-span-6 space-y-5">
-              <div>
-                <div class="flex flex-wrap items-center gap-2 mb-2">
-                  <span class="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-extrabold">
-                    ${escapeHtml(step.sectionTitle)}
-                  </span>
-                  <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-extrabold">
-                    Set ${step.setNum} of ${step.totalSets} • Exercise ${step.exerciseIndexInSet + 1} of ${step.totalExercisesInSet}
-                  </span>
-                </div>
-                <h2 class="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">${escapeHtml(ex.name)}</h2>
-                <p class="text-xs font-bold text-indigo-600 mt-1">${escapeHtml(ex.muscle || '')}</p>
-              </div>
-
-              <!-- Repetition / Clickable Timer Box -->
-              <div>
-                ${repDisplayHTML}
-              </div>
-
-              <!-- Coaching Cues -->
-              <div class="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span class="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1">Form &amp; Execution Cue</span>
-                <p class="text-sm text-slate-700 leading-relaxed">${escapeHtml(ex.cues || 'Maintain controlled form and steady breathing throughout.')}</p>
-              </div>
-
-              <!-- Primary Action Button -->
-              <div class="pt-2 flex flex-wrap items-center gap-3">
-                ${isFinalStep ? `
-                  <button
-                    type="button"
-                    data-action="finish-workout"
-                    class="flex-1 py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-sm shadow-lg shadow-emerald-200 transition-transform active:scale-95"
-                  >
-                    ✓ Finish Workout &amp; Save Summary
-                  </button>
-                ` : `
-                  <button
-                    type="button"
-                    data-action="next-exercise"
-                    class="flex-1 py-4 px-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-sm shadow-lg shadow-indigo-200 transition-transform active:scale-95"
-                  >
-                    Next Exercise ${step.restAfterSeconds > 0 ? `(${step.restAfterSeconds}s Rest)` : ''} &rarr;
-                  </button>
-                `}
-              </div>
-            </div>
-          </div>
-        `;
-      }
+      const step = s.steps[s.currentStepIdx];
+      const isFinalStep = s.currentStepIdx >= s.steps.length - 1;
+      const progressPct = Math.round(((s.currentStepIdx + (s.inRest ? 0.5 : 0)) / s.steps.length) * 100);
+      const nextStep = s.steps[s.currentStepIdx + 1] || null;
 
       return `
-        <div class="max-w-5xl mx-auto space-y-5">
-          <!-- Top Master Timer & Control Bar -->
+        <div class="max-w-4xl mx-auto space-y-5">
+          <!-- Top Master Running Timer & Controls Bar (Rules 5, 8, 10, 11) -->
           <div class="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-lg flex flex-wrap items-center justify-between gap-4">
-            <div class="flex items-center gap-4">
+            <div class="flex items-center gap-3.5">
+              <div class="w-11 h-11 rounded-2xl ${s.paused ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'} flex items-center justify-center">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
               <div>
-                <span class="block text-[10px] font-bold uppercase tracking-widest text-slate-400">Total Workout Time</span>
-                <span class="font-mono text-2xl sm:text-3xl font-extrabold tabular-nums ${s.isPaused ? 'text-amber-400' : 'text-emerald-400'}">
-                  ${formatDuration(s.elapsedSeconds)}
+                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Total Workout Time ${s.paused ? '(PAUSED)' : ''}
+                </span>
+                <span id="session-master-clock" class="text-2xl sm:text-3xl font-mono font-extrabold tracking-tight text-white">
+                  ${formatDurationClock(s.elapsedSeconds)}
                 </span>
               </div>
-              ${s.isPaused ? `<span class="px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs font-extrabold">PAUSED</span>` : ''}
             </div>
 
             <div class="flex items-center gap-2.5">
-              <button
-                type="button"
-                data-action="toggle-pause-workout"
-                class="px-4 py-2.5 rounded-xl text-xs font-extrabold transition-colors ${
-                  s.isPaused
-                    ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
-                    : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
-                }"
-              >
-                ${s.isPaused ? '▶ Resume Workout' : '❚❚ Pause Workout'}
+              <button type="button" id="btn-session-pause"
+                class="px-4 py-2.5 rounded-xl text-xs font-extrabold transition-colors flex items-center gap-1.5
+                  ${s.paused ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950' : 'bg-amber-500 hover:bg-amber-400 text-slate-950'}">
+                ${s.paused ? '▶ Resume Workout' : '❚❚ Pause Workout'}
               </button>
-              <button
-                type="button"
-                data-action="open-cancel-workout"
-                class="px-4 py-2.5 rounded-xl text-xs font-extrabold bg-rose-600/90 hover:bg-rose-600 text-white transition-colors"
-              >
+              <button type="button" id="btn-session-cancel"
+                class="px-4 py-2.5 rounded-xl text-xs font-extrabold bg-rose-600 hover:bg-rose-500 text-white transition-colors">
                 Cancel Workout
               </button>
             </div>
           </div>
 
-          <!-- Progress Bar -->
-          <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-            <div class="flex items-center justify-between text-xs font-bold text-slate-600 mb-2">
-              <span>Step ${Math.min(s.currentStepIndex + 1, s.steps.length)} of ${s.steps.length}</span>
-              <span>${progressPercent}% Complete</span>
+          <!-- Overall Progress Bar -->
+          <div class="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-2">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-indigo-600">${escapeHtml(step.sectionTitle)} • Set ${step.setNum} of ${step.totalSets}</span>
+              <span class="text-slate-500">Step ${s.currentStepIdx + 1} of ${s.steps.length} (${progressPct}%)</span>
             </div>
             <div class="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-              <div class="h-full bg-gradient-to-r from-indigo-600 to-violet-600 transition-all duration-300" style="width: ${progressPercent}%"></div>
+              <div class="h-full bg-gradient-to-r from-indigo-600 to-violet-600 rounded-full transition-all duration-300" style="width: ${progressPct}%"></div>
             </div>
           </div>
 
-          <!-- Main Exercise / Rest Stage -->
-          <div class="bg-white rounded-2xl border border-slate-200 p-5 sm:p-7 shadow-sm">
-            ${mainCardBody}
-          </div>
+          <!-- Active Exercise OR Rest Interval Card -->
+          ${s.inRest ? `
+            <div class="bg-white rounded-2xl p-6 sm:p-10 border-2 border-amber-300 shadow-md text-center space-y-5">
+              <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold uppercase tracking-wide">
+                Recovery Interval
+              </span>
+              <h2 class="text-2xl font-extrabold text-slate-900">${escapeHtml(s.restLabel)}</h2>
+              <div class="relative w-36 h-36 mx-auto flex items-center justify-center rounded-full bg-amber-50 border-4 border-amber-400">
+                <span id="session-rest-clock" class="text-4xl font-mono font-extrabold text-amber-700">${s.restRemaining}s</span>
+              </div>
+              <div class="max-w-md mx-auto w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                <div id="session-rest-bar" class="h-full bg-amber-500 transition-all duration-500" style="width: ${Math.round((s.restRemaining / Math.max(1, s.restTotal)) * 100)}%"></div>
+              </div>
+              ${nextStep ? `
+                <p class="text-xs text-slate-500">
+                  Up Next: <strong class="text-slate-800">${escapeHtml(nextStep.exercise.name)}</strong> (Set ${nextStep.setNum}/${nextStep.totalSets})
+                </p>
+              ` : ''}
+              <div>
+                <button type="button" id="btn-skip-rest" class="px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold transition-colors">
+                  Skip Rest &amp; Start Next Exercise &rarr;
+                </button>
+              </div>
+            </div>
+          ` : `
+            <div class="bg-white rounded-2xl p-5 sm:p-7 border border-slate-200 shadow-sm space-y-6">
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+                <!-- Exercise Visual Demonstration (GIF / Video Switchable) -->
+                <div>
+                  ${renderExerciseMediaHTML(step.exercise, 'h-64 sm:h-72')}
+                </div>
+
+                <!-- Exercise Details, Clickable Timed Repetitions & Next/Finish Controls -->
+                <div class="space-y-5">
+                  <div>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-extrabold">
+                      Set ${step.setNum} of ${step.totalSets} • Exercise ${step.exIndexInSet + 1} of ${step.totalExInSet}
+                    </span>
+                    <h2 class="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-2 leading-tight">
+                      ${escapeHtml(step.exercise.name)}
+                    </h2>
+                    <p class="text-sm text-slate-600 mt-2 leading-relaxed">${escapeHtml(step.exercise.cue)}</p>
+                  </div>
+
+                  <!-- Rule 15 & Rule 16: Repetition Display + Clickable Countdown for Timing Repetitions -->
+                  <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/90">
+                    <span class="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1.5">Target Prescription</span>
+                    ${step.exercise.repType === 'time' ? `
+                      <button type="button" id="btn-start-rep-countdown"
+                        class="w-full py-3.5 px-4 rounded-xl font-mono text-lg font-extrabold transition-all flex items-center justify-center gap-2.5 shadow-sm
+                          ${s.repCountdownActive
+                            ? 'bg-emerald-600 text-white ring-4 ring-emerald-500/20'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'}">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        ${s.repCountdownActive
+                          ? `<span>Counting Down: <span id="session-rep-countdown-val">${s.repRemaining}s</span></span>`
+                          : `<span>${step.exercise.repValue} secs — Click to Start Timer</span>`}
+                      </button>
+                      <p class="text-[11px] text-slate-500 mt-1.5 text-center">
+                        Auto-advances to the next exercise when countdown reaches 0s.
+                      </p>
+                    ` : `
+                      <div class="flex items-center justify-between">
+                        <span class="text-2xl font-mono font-extrabold text-slate-900">${step.exercise.repValue} Reps</span>
+                        <span class="text-xs font-semibold text-slate-500">Complete reps, then click Next</span>
+                      </div>
+                    `}
+                  </div>
+
+                  <!-- Rest Preview Notice -->
+                  <div class="text-xs font-semibold ${step.restAfterSeconds > 0 ? 'text-amber-700' : 'text-emerald-700'}">
+                    ${isFinalStep
+                      ? '🏁 Final exercise! Click Finish Workout once complete.'
+                      : step.restAfterSeconds > 0
+                        ? `⏱ Next: ${step.restLabel}`
+                        : '⚡ Continuous flow: Next exercise begins immediately (0s rest)'}
+                  </div>
+
+                  <!-- Primary Action Button: Next Exercise OR Finish Workout -->
+                  <div>
+                    ${isFinalStep ? `
+                      <button type="button" id="btn-finish-workout"
+                        class="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-base font-extrabold shadow-lg shadow-emerald-200 transition-all">
+                        ✓ Finish Workout
+                      </button>
+                    ` : `
+                      <button type="button" id="btn-next-exercise"
+                        class="w-full py-4 px-6 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-base font-extrabold shadow-md transition-all flex items-center justify-center gap-2">
+                        <span>Next Exercise</span>
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                      </button>
+                    `}
+                  </div>
+                </div>
+              </div>
+            </div>
+          `}
         </div>
       `;
     }
 
     function renderSummaryView() {
-      const data = state.summaryData;
-      if (!data) return '';
-      const w = data.workout;
+      const summary = state.summaryData;
+      if (!summary || !summary.workout) {
+        state.view = 'calendar';
+        return renderCalendarView();
+      }
 
+      const w = summary.workout;
       return `
-        <div class="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 p-6 sm:p-10 shadow-xl text-center space-y-6">
-          <div class="w-20 h-20 rounded-3xl bg-emerald-100 text-emerald-600 mx-auto flex items-center justify-center shadow-inner">
-            <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-
-          <div>
-            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-50 text-emerald-700 mb-2">
+        <div class="max-w-3xl mx-auto bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-lg space-y-6">
+          <div class="text-center space-y-2">
+            <div class="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+              <svg class="w-9 h-9" fill="none" stroke="currentColor" stroke-width="2.6" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <span class="px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-extrabold uppercase tracking-wider">
               Workout Completed &amp; Saved
             </span>
-            <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900">Great Job Finishing Your Session!</h1>
-            <p class="text-sm text-slate-500 mt-1">${formatReadableDate(w.dateStr)} • ${escapeHtml(w.targetSplit)}</p>
+            <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Great Work! Session Summary</h1>
+            <p class="text-sm text-slate-500">${escapeHtml(formatDisplayDate(w.dateStr))} • ${escapeHtml(w.targetSplit)} Focus</p>
           </div>
 
-          <div class="grid grid-cols-2 gap-4 max-w-md mx-auto">
-            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Time Spent</span>
-              <span class="font-mono text-2xl font-extrabold text-indigo-600 mt-1 block">${formatDuration(data.durationSeconds)}</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
+              <span class="text-[11px] font-bold uppercase text-slate-400 block">Time Spent</span>
+              <span class="text-2xl font-mono font-extrabold text-indigo-600 mt-1 block">${formatDurationClock(summary.totalSeconds)}</span>
             </div>
-            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <span class="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Exercises Completed</span>
-              <span class="font-mono text-2xl font-extrabold text-emerald-600 mt-1 block">${data.totalStepsCompleted} Steps</span>
+            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
+              <span class="text-[11px] font-bold uppercase text-slate-400 block">Target Split</span>
+              <span class="text-xl font-extrabold text-slate-900 mt-1 block">${escapeHtml(w.targetSplit)}</span>
+            </div>
+            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
+              <span class="text-[11px] font-bold uppercase text-slate-400 block">Sets Completed</span>
+              <span class="text-2xl font-mono font-extrabold text-emerald-600 mt-1 block">${summary.totalStepsCompleted}</span>
             </div>
           </div>
 
-          <div class="text-left bg-slate-50 rounded-2xl border border-slate-200 p-4 space-y-2">
-            <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-500">Completed Sections Breakdown</h3>
-            ${(w.sections || []).map((sec) => `
-              <div class="flex items-center justify-between text-xs py-1.5 border-b border-slate-200/60 last:border-none">
-                <span class="font-bold text-slate-800">${escapeHtml(sec.title)}</span>
-                <span class="font-semibold text-slate-500">${sec.sets} Set${sec.sets > 1 ? 's' : ''} (${sec.exercises.length} exercises)</span>
-              </div>
-            `).join('')}
+          <div class="space-y-3">
+            <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-500">Completed Routine Breakdown</h2>
+            <div class="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden">
+              ${w.sections.map((sec) => `
+                <div class="p-4 bg-white">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-sm font-extrabold text-slate-900">${escapeHtml(sec.title)}</span>
+                    <span class="text-xs font-bold text-indigo-600">${sec.sets} ${sec.sets === 1 ? 'Set' : 'Sets'}</span>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    ${sec.exercises.map((ex) => `
+                      <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
+                        ${escapeHtml(ex.name)} (${ex.repType === 'time' ? `${ex.repValue}s` : `${ex.repValue} reps`})
+                      </span>
+                    `).join('')}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
           </div>
 
-          <div class="pt-2">
-            <button
-              type="button"
-              data-action="back-to-calendar"
-              class="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm shadow-md shadow-indigo-200 transition-transform active:scale-95"
-            >
-              &larr; Back to Calendar
+          <div class="pt-2 flex justify-center">
+            <button type="button" id="btn-summary-back-calendar"
+              class="px-8 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-extrabold shadow-md transition-all">
+              &larr; Back to Calendar Page
             </button>
           </div>
         </div>
       `;
     }
 
+    // =========================================================================
+    // 13. MAIN RENDER CONTROLLER & EVENT BINDING
+    // =========================================================================
     function render() {
       const root = document.getElementById('app-root');
       if (!root) return;
 
-      const adminDot = document.getElementById('admin-badge-dot');
-      if (adminDot) {
-        adminDot.className = `w-2 h-2 rounded-full ${state.isAdminMode ? 'bg-emerald-500' : 'bg-slate-400'}`;
-      }
-
-      if (state.view === 'active' && state.session) {
-        root.innerHTML = renderActiveWorkoutView();
-      } else if (state.view === 'summary' && state.summaryData) {
+      if (state.view === 'session') {
+        root.innerHTML = renderActiveSessionView();
+      } else if (state.view === 'workout') {
+        root.innerHTML = renderWorkoutDetailView();
+      } else if (state.view === 'summary') {
         root.innerHTML = renderSummaryView();
       } else {
-        root.innerHTML = renderCalendarAndDayView();
+        root.innerHTML = renderCalendarView();
       }
+
+      bindDynamicEvents();
+    }
+
+    function bindDynamicEvents() {
+      // Calendar navigation
+      document.getElementById('btn-prev-month')?.addEventListener('click', () => {
+        if (state.currentMonth === 0) {
+          state.currentMonth = 11;
+          state.currentYear -= 1;
+        } else {
+          state.currentMonth -= 1;
+        }
+        render();
+      });
+
+      document.getElementById('btn-next-month')?.addEventListener('click', () => {
+        if (state.currentMonth === 11) {
+          state.currentMonth = 0;
+          state.currentYear += 1;
+        } else {
+          state.currentMonth += 1;
+        }
+        render();
+      });
+
+      // Calendar date selection
+      document.querySelectorAll('[data-action="select-calendar-date"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.selectedDate = btn.dataset.date;
+          render();
+        });
+      });
+
+      // Open workout page for selected date
+      document.querySelectorAll('[data-action="open-workout-page"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.selectedDate = btn.dataset.date || state.selectedDate;
+          state.view = 'workout';
+          render();
+        });
+      });
+
+      // Split override dropdown
+      document.getElementById('select-assign-split')?.addEventListener('change', (e) => {
+        state.selectedSplitOverride = e.target.value;
+      });
+
+      // Assign complete workout to date
+      document.getElementById('btn-assign-workout')?.addEventListener('click', async () => {
+        const splitSelect = document.getElementById('select-assign-split');
+        const chosenSplit = splitSelect ? splitSelect.value : state.selectedSplitOverride;
+        const newWorkout = buildWorkoutForDate(state.selectedDate, chosenSplit);
+        state.view = 'workout';
+        await saveWorkoutToDatabase(newWorkout);
+        showToast(`Assigned ${newWorkout.targetSplit} workout to ${state.selectedDate}!`, 'emerald');
+      });
+
+      // Back to calendar
+      document.getElementById('btn-back-to-calendar')?.addEventListener('click', () => {
+        state.view = 'calendar';
+        render();
+      });
+
+      document.getElementById('btn-summary-back-calendar')?.addEventListener('click', () => {
+        state.view = 'calendar';
+        render();
+      });
+
+      // Modify workout
+      document.getElementById('btn-modify-workout')?.addEventListener('click', () => {
+        openModifyWorkoutModal(state.selectedDate);
+      });
+
+      // Remove workout
+      document.getElementById('btn-delete-workout')?.addEventListener('click', async () => {
+        await deleteWorkoutFromDatabase(state.selectedDate);
+        showToast('Workout removed from schedule.', 'amber');
+      });
+
+      // Start workout session
+      document.getElementById('btn-start-workout')?.addEventListener('click', () => {
+        startWorkoutSession(state.selectedDate);
+      });
+
+      // Active session controls
+      document.getElementById('btn-session-pause')?.addEventListener('click', togglePauseWorkout);
+      document.getElementById('btn-session-cancel')?.addEventListener('click', promptCancelWorkout);
+      document.getElementById('btn-start-rep-countdown')?.addEventListener('click', startTimedRepCountdown);
+      document.getElementById('btn-next-exercise')?.addEventListener('click', advanceToNextExercise);
+      document.getElementById('btn-finish-workout')?.addEventListener('click', finishWorkoutSession);
+      document.getElementById('btn-skip-rest')?.addEventListener('click', advanceToNextExercise);
+
+      // GIF / Video mode switcher on exercise cards & active session
+      document.querySelectorAll('[data-action="toggle-media-mode"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const exUid = btn.dataset.exUid;
+          const exId = btn.dataset.exId;
+          const mode = btn.dataset.mode;
+
+          // Update in current workout object if present
+          const w = state.workoutsByDate[state.selectedDate];
+          if (w && Array.isArray(w.sections)) {
+            w.sections.forEach((sec) => {
+              sec.exercises.forEach((ex) => {
+                if (ex.uid === exUid || ex.id === exId) {
+                  ex.mediaMode = mode;
+                }
+              });
+            });
+          }
+
+          // Update in active session step if present
+          if (state.session && Array.isArray(state.session.steps)) {
+            state.session.steps.forEach((st) => {
+              if (st.exercise.uid === exUid || st.exercise.id === exId) {
+                st.exercise.mediaMode = mode;
+              }
+            });
+          }
+
+          render();
+        });
+      });
+
+      // Admin Media Upload / URL modal trigger
+      document.querySelectorAll('[data-action="open-media-upload"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          openAdminMediaModal(btn.dataset.exId, btn.dataset.exName);
+        });
+      });
     }
 
     // =========================================================================
-    // 10. GLOBAL EVENT DELEGATION (Clicks, Form Submits, File Uploads)
+    // 14. GLOBAL HEADER BUTTONS & STARTUP
     // =========================================================================
-    document.addEventListener('click', async (e) => {
-      const target = e.target.closest('[data-action]');
-      if (!target) return;
-
-      const action = target.dataset.action;
-
-      if (action === 'select-date') {
-        state.selectedDateStr = target.dataset.dateStr;
-        render();
-      } else if (action === 'prev-month') {
-        state.currentMonthDate = new Date(state.currentMonthDate.getFullYear(), state.currentMonthDate.getMonth() - 1, 1);
-        render();
-      } else if (action === 'next-month') {
-        state.currentMonthDate = new Date(state.currentMonthDate.getFullYear(), state.currentMonthDate.getMonth() + 1, 1);
-        render();
-      } else if (action === 'assign-workout') {
-        const dateStr = target.dataset.dateStr;
-        const splitSelect = document.getElementById('select-assign-split');
-        const chosenSplit = splitSelect ? splitSelect.value : getAutoSplitForDate(dateStr);
-        const newWorkout = buildWorkoutForDate(dateStr, chosenSplit);
-        await saveWorkoutToDatabase(newWorkout);
-        showToast(`Assigned ${chosenSplit} workout for ${formatReadableDate(dateStr)}!`, 'success');
-      } else if (action === 'delete-workout') {
-        const dateStr = target.dataset.dateStr;
-        await deleteWorkoutFromDatabase(dateStr);
-        showToast('Workout removed from schedule.', 'info');
-      } else if (action === 'start-workout') {
-        startActiveWorkout(target.dataset.dateStr);
-      } else if (action === 'next-exercise') {
-        advanceToNextExercise();
-      } else if (action === 'finish-workout') {
-        await finishActiveWorkout();
-      } else if (action === 'toggle-pause-workout') {
-        togglePauseWorkout();
-      } else if (action === 'open-cancel-workout') {
-        openCancelWorkoutModal();
-      } else if (action === 'confirm-cancel-workout') {
-        confirmCancelWorkout();
-      } else if (action === 'start-rep-timer') {
-        startTimedRepCountdown(Number(target.dataset.seconds) || 30);
-      } else if (action === 'back-to-calendar') {
-        state.view = 'calendar';
-        state.summaryData = null;
-        render();
-      } else if (action === 'set-media-mode') {
-        const exId = target.dataset.exId;
-        const mode = target.dataset.mode;
-        await saveMediaOverrideToDatabase(exId, { mediaMode: mode });
-      } else if (action === 'open-media-modal') {
-        openAdminMediaModal(target.dataset.exId, target.dataset.exName);
-      } else if (action === 'reset-exercise-media') {
-        const exId = target.dataset.exId;
-        await saveMediaOverrideToDatabase(exId, { mediaMode: 'gif', videoUrl: '', gifUrl: '' });
-        closeModal();
-        showToast('Reset exercise media to built-in animation.', 'info');
-      } else if (action === 'open-modify-modal') {
-        openModifyWorkoutModal(target.dataset.dateStr);
-      } else if (action === 'add-editor-exercise') {
-        const sIdx = target.dataset.secIdx;
-        const container = document.getElementById(`editor-sec-${sIdx}`);
-        if (container) {
-          const row = document.createElement('div');
-          row.className = 'grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white p-2.5 rounded-xl border border-slate-200 editor-ex-row';
-          row.dataset.secIdx = sIdx;
-          row.innerHTML = `
-            <input type="hidden" name="exId" value="custom-${Date.now()}" />
-            <input type="hidden" name="animType" value="squat" />
-            <input type="hidden" name="cues" value="Focus on controlled movement and full range of motion." />
-            <div class="sm:col-span-5">
-              <input type="text" name="exName" value="Custom Exercise" placeholder="Exercise Name" class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold" required />
-            </div>
-            <div class="sm:col-span-3">
-              <select name="repType" class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-semibold">
-                <option value="reps" selected>Reps</option>
-                <option value="time">Seconds (Timed)</option>
-              </select>
-            </div>
-            <div class="sm:col-span-3">
-              <input type="number" name="repValue" min="1" max="600" value="12" class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono font-bold" required />
-            </div>
-            <div class="sm:col-span-1 flex justify-end">
-              <button type="button" onclick="this.closest('.editor-ex-row').remove()" class="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50" title="Remove Exercise">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </div>
-          `;
-          container.appendChild(row);
-        }
-      } else if (action === 'close-modal') {
-        closeModal();
-      }
-    });
-
-    document.addEventListener('submit', async (e) => {
-      const form = e.target;
-
-      if (form.id === 'form-admin-media') {
-        e.preventDefault();
-        const exId = form.dataset.exId;
-        const mediaMode = form.querySelector('[name="mediaMode"]').value;
-        const pastedUrl = form.querySelector('[name="mediaUrl"]').value.trim();
-        const fileInput = form.querySelector('[name="mediaFile"]');
-        const file = fileInput && fileInput.files ? fileInput.files[0] : null;
-
-        let finalUrl = pastedUrl;
-        let resolvedMode = mediaMode;
-
-        if (file) {
-          resolvedMode = file.type.includes('gif') ? 'gif' : 'video';
-          if (file.size <= 45000) {
-            finalUrl = await new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result || ''));
-              reader.readAsDataURL(file);
-            });
-          } else {
-            finalUrl = URL.createObjectURL(file);
-            showToast('Large local file previewed in this browser. For Google Sheet cross-browser sync, paste a direct URL link.', 'warning');
-          }
-        } else if (pastedUrl && pastedUrl.toLowerCase().endsWith('.gif')) {
-          resolvedMode = 'gif';
-        }
-
-        await saveMediaOverrideToDatabase(exId, {
-          mediaMode: resolvedMode,
-          videoUrl: resolvedMode === 'video' ? finalUrl : '',
-          gifUrl: resolvedMode === 'gif' ? finalUrl : '',
-        });
-
-        closeModal();
-        showToast('Exercise demonstration media updated!', 'success');
-      } else if (form.id === 'form-modify-workout') {
-        e.preventDefault();
-        const dateStr = form.dataset.dateStr;
-        const existing = state.workoutsByDate[dateStr];
-        if (!existing) return;
-
-        const targetSplit = form.querySelector('[name="targetSplit"]').value;
-        const updatedSections = existing.sections.map((sec, sIdx) => {
-          const container = document.getElementById(`editor-sec-${sIdx}`);
-          const rows = container ? Array.from(container.querySelectorAll('.editor-ex-row')) : [];
-          const exercises = rows.map((row) => ({
-            id: row.querySelector('[name="exId"]').value,
-            name: row.querySelector('[name="exName"]').value.trim() || 'Exercise',
-            repType: row.querySelector('[name="repType"]').value,
-            repValue: Math.max(1, Number(row.querySelector('[name="repValue"]').value) || 10),
-            animType: row.querySelector('[name="animType"]').value || 'squat',
-            cues: row.querySelector('[name="cues"]').value || '',
-            muscle: targetSplit,
-          }));
-          return {
-            ...sec,
-            exercises: exercises.length > 0 ? exercises : sec.exercises,
-          };
-        });
-
-        const updatedWorkout = {
-          ...existing,
-          targetSplit,
-          sections: updatedSections,
-        };
-
-        await saveWorkoutToDatabase(updatedWorkout);
-        closeModal();
-        showToast('Workout changes saved!', 'success');
-      }
-    });
-
-    // Header static button listeners
     document.getElementById('btn-brand-home')?.addEventListener('click', () => {
-      if (state.view !== 'active') {
-        state.view = 'calendar';
-        render();
+      if (state.session) {
+        promptCancelWorkout();
+        return;
       }
+      state.view = 'calendar';
+      render();
+    });
+
+    document.getElementById('btn-jump-today')?.addEventListener('click', () => {
+      if (state.session) {
+        showToast('Finish or cancel your active workout before switching dates.', 'amber');
+        return;
+      }
+      const now = new Date();
+      state.currentYear = now.getFullYear();
+      state.currentMonth = now.getMonth();
+      state.selectedDate = formatDateStr(now);
+      state.view = 'calendar';
+      render();
     });
 
     document.getElementById('btn-toggle-admin')?.addEventListener('click', () => {
-      state.isAdminMode = !state.isAdminMode;
-      showToast(`Admin media controls ${state.isAdminMode ? 'enabled' : 'hidden'}.`, 'info');
+      state.adminMode = !state.adminMode;
+      const dot = document.getElementById('admin-badge-dot');
+      const btn = document.getElementById('btn-toggle-admin');
+      if (dot) {
+        dot.className = `w-2 h-2 rounded-full ${state.adminMode ? 'bg-emerald-500' : 'bg-slate-400'}`;
+      }
+      if (btn) {
+        btn.className = state.adminMode
+          ? 'px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+          : 'px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200/70';
+      }
+      showToast(state.adminMode ? 'Admin Media controls enabled.' : 'Admin Media controls hidden.', 'indigo');
       render();
     });
 
@@ -2214,40 +2256,20 @@
       state.soundEnabled = !state.soundEnabled;
       document.getElementById('icon-sound-on')?.classList.toggle('hidden', !state.soundEnabled);
       document.getElementById('icon-sound-off')?.classList.toggle('hidden', state.soundEnabled);
-      showToast(`Timer audio cues ${state.soundEnabled ? 'unmuted' : 'muted'}.`, 'info');
+      showToast(state.soundEnabled ? 'Timer audio cues unmuted.' : 'Timer audio cues muted.', 'indigo');
     });
 
-    document.getElementById('btn-jump-today')?.addEventListener('click', () => {
-      const now = new Date();
-      state.currentMonthDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      state.selectedDateStr = toDateStr(now);
-      if (state.view !== 'active') {
-        state.view = 'calendar';
-      }
-      render();
-    });
-
-    // =========================================================================
-    // 11. INITIALIZE APPLICATION ON LOAD
-    // =========================================================================
-    window.addEventListener('DOMContentLoaded', () => {
-      render();
-      initDatabase();
-
-      // Periodically pull fresh workouts from Google Sheet when idle on calendar
-      setInterval(() => {
-        if ((state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) && state.view === 'calendar') {
-          pullFromGoogleSheet(state.googleSheetUrl, true).catch(() => {});
+    // Sync from Google Sheet when returning to browser tab
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.view !== 'session') {
+        if (state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) {
+          pullFromGoogleSheet(state.googleSheetUrl, false).catch(() => {});
         }
-      }, BACKEND_CONFIG.AUTO_POLL_INTERVAL_MS || 15000);
-    });
-
-    // Automatically refresh from Google Sheet when switching back to this browser tab
-    window.addEventListener('focus', () => {
-      if ((state.syncProvider === 'gas-native' || (state.syncProvider === 'google-sheet' && state.googleSheetUrl)) && state.view === 'calendar') {
-        pullFromGoogleSheet(state.googleSheetUrl, true).catch(() => {});
       }
     });
+
+    // Boot application
+    initDatabase();
   </script>
 </body>
 </html>
